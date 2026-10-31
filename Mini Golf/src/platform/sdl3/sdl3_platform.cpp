@@ -25,7 +25,7 @@
 #include "gamedata/install.h"
 #include "gamedata/manifest.h"
 #include "ipod/platform/device.h"
-#include "ipod/platform/sdl3/presentation.h"
+#include "ipod/platform/sdl3/presenter.h"
 #include "ipod/runtime/fatal.h"
 #include "platform/input_bindings.h"
 #include "platform/paths.h"
@@ -82,9 +82,6 @@ constexpr unsigned ASSIGNABLE_KEY_COUNT = 48;
 // A ceiling on Sharp's intermediate texture: eight times 320x240 is 2560x1920, enough to cover
 // any screen worth playing this on, and a bound on what a wildly resized window can ask for.
 constexpr int MAX_PRESCALE = 8;
-// Halvings on the way down from a picture larger than the window; the cap is only here so that a
-// bad output size cannot loop.
-constexpr unsigned MAX_REDUCTION_STEPS = 4;
 
 // MINIGOLF_TRACE_INPUT=1 prints every key the window receives, with what it is bound to. What a
 // device actually sends differs by device and by the system's own settings, and there is no other
@@ -500,7 +497,7 @@ public:
         hooks.context = this;
         hooks.game_window = window_;
         settings_window_install(hooks);
-        ensure_texture(SCREEN_WIDTH, SCREEN_HEIGHT);
+        presenter_.attach(renderer_, SCREEN_WIDTH, SCREEN_HEIGHT);
         apply_presentation();
         // Show black until the game has drawn something.
         //
@@ -520,17 +517,7 @@ public:
         for (Voice& voice : voices_) {
             voice.stop();
         }
-        if (prescale_ != nullptr) {
-            SDL_DestroyTexture(prescale_);
-        }
-        for (SDL_Texture* step : reduce_) {
-            if (step != nullptr) {
-                SDL_DestroyTexture(step);
-            }
-        }
-        if (texture_ != nullptr) {
-            SDL_DestroyTexture(texture_);
-        }
+        presenter_.reset();
         if (renderer_ != nullptr) {
             SDL_DestroyRenderer(renderer_);
         }
@@ -547,6 +534,14 @@ public:
         input = FrameInput{};
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_EVENT_KEY_DOWN &&
+                event.key.windowID == SDL_GetWindowID(window_) &&
+                presenter_.handle_shortcut(event)) {
+                settings().scaling = presenter_.options().scaling;
+                settings().pixel_perfect = presenter_.options().pixel_perfect;
+                save_settings();
+                continue;
+            }
             switch (event.type) {
             case SDL_EVENT_QUIT:
                 input.quit = true;
@@ -645,48 +640,8 @@ public:
     }
 
     void present(const uint8_t* rgb, unsigned width, unsigned height) override {
-        if (renderer_ == nullptr || !ensure_texture(width, height)) {
-            return;
-        }
-        SDL_UpdateTexture(texture_, nullptr, rgb, static_cast<int>(width) * 3);
-        SDL_RenderClear(renderer_);
-
-        // Is the picture bigger than the window it has to fit in?
-        //
-        // It never used to be able to be. The game drew 320x240 and every window was larger, so
-        // the last step was always a magnification, and `Nearest` — whole, hard pixel blocks —
-        // was the right filter for it. A render scale above 1 breaks that assumption, and the two
-        // want opposite filters: reducing with `Nearest` keeps three pixels out of four and
-        // throws the rest away, which costs exactly the fine dark detail.
-        int output_width = 0, output_height = 0;
-        const bool have_output =
-            ipod::video::presentation_size(renderer_, &output_width, &output_height);
-        const bool reducing =
-            have_output && (texture_width_ > output_width || texture_height_ > output_height);
-
-        SDL_Texture* source = texture_;
-        if (reducing) {
-            // Reduced, so filtered — and by halves, because one bilinear tap reads four texels
-            // and can only honestly reduce by two. Each step is a proper average of what it
-            // replaces, which is what makes the extra pixels worth having: drawn at 4x and shown
-            // at 1x, the picture is supersampled.
-            SDL_SetTextureScaleMode(texture_, SDL_SCALEMODE_LINEAR);
-            source = reduce_to_fit(output_width, output_height);
-        } else {
-            apply_texture_scale_mode();
-            // Sharp scaling is two passes: whole-number blocks first, so every game pixel is the
-            // same size, then a smooth fit of that to the window, which only ever has to soften
-            // the fraction left over. It is a magnification and only makes sense as one, which is
-            // why it sits on this side of the branch.
-            if (settings().scaling == Scaling::Sharp && update_prescale()) {
-                SDL_SetRenderTarget(renderer_, prescale_);
-                SDL_RenderTexture(renderer_, texture_, nullptr, nullptr);
-                SDL_SetRenderTarget(renderer_, nullptr);
-                source = prescale_;
-            }
-        }
-        SDL_RenderTexture(renderer_, source, nullptr, nullptr);
-        SDL_RenderPresent(renderer_);
+        if (!presenter_.present(rgb, width, height))
+            std::fprintf(stderr, "video: %s\n", SDL_GetError());
         update_frame_rate_display();
     }
 
@@ -1091,115 +1046,7 @@ private:
     }
 
     void apply_presentation() {
-        ipod::video::configure_presentation(renderer_, static_cast<int>(SCREEN_WIDTH),
-                                            static_cast<int>(SCREEN_HEIGHT),
-                                            settings().pixel_perfect);
-        apply_texture_scale_mode();
-    }
-
-    void apply_texture_scale_mode() {
-        if (texture_ == nullptr) {
-            return;
-        }
-        // Sharp does its own smoothing in the second pass; the game's own picture is always
-        // magnified by whole blocks.
-        SDL_SetTextureScaleMode(texture_, settings().scaling == Scaling::Smooth
-                                              ? SDL_SCALEMODE_LINEAR
-                                              : SDL_SCALEMODE_NEAREST);
-    }
-
-    // The streaming texture the game's picture is uploaded through, at whatever size the renderer
-    // is drawing. Rebuilt when that size changes, which is when the render scale does.
-    bool ensure_texture(unsigned width, unsigned height) {
-        if (width == 0 || height == 0) {
-            return false;
-        }
-        if (texture_ != nullptr && texture_width_ == static_cast<int>(width) &&
-            texture_height_ == static_cast<int>(height)) {
-            return true;
-        }
-        if (texture_ != nullptr) {
-            SDL_DestroyTexture(texture_);
-        }
-        texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING,
-                                     static_cast<int>(width), static_cast<int>(height));
-        if (texture_ == nullptr) {
-            texture_width_ = texture_height_ = 0;
-            return false;
-        }
-        texture_width_ = static_cast<int>(width);
-        texture_height_ = static_cast<int>(height);
-        apply_texture_scale_mode();
-        return true;
-    }
-
-    // Halve the picture until it is no more than twice the output in each direction. Two targets,
-    // used alternately, because a texture cannot be read and written in the same pass; both are
-    // rebuilt only when the size they need changes, so a steady window allocates nothing.
-    SDL_Texture* reduce_to_fit(int output_width, int output_height) {
-        SDL_Texture* source = texture_;
-        int source_width = texture_width_, source_height = texture_height_;
-        unsigned step = 0;
-        while (source_width / 2 >= output_width && source_height / 2 >= output_height &&
-               step < MAX_REDUCTION_STEPS) {
-            const int half_width = source_width / 2, half_height = source_height / 2;
-            SDL_Texture*& target = reduce_[step % 2];
-            if (target == nullptr || reduce_size_[step % 2].first != half_width ||
-                reduce_size_[step % 2].second != half_height) {
-                if (target != nullptr) {
-                    SDL_DestroyTexture(target);
-                }
-                target = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGB24,
-                                           SDL_TEXTUREACCESS_TARGET, half_width, half_height);
-                if (target == nullptr) {
-                    return source;  // nothing to reduce into; the fit still filters
-                }
-                SDL_SetTextureScaleMode(target, SDL_SCALEMODE_LINEAR);
-                reduce_size_[step % 2] = {half_width, half_height};
-            }
-            SDL_SetRenderTarget(renderer_, target);
-            SDL_RenderTexture(renderer_, source, nullptr, nullptr);
-            SDL_SetRenderTarget(renderer_, nullptr);
-            source = target;
-            source_width = half_width;
-            source_height = half_height;
-            ++step;
-        }
-        return source;
-    }
-
-    // The intermediate texture Sharp draws through: the game's picture at the smallest whole
-    // multiple that covers the window, so the smooth pass never has to enlarge, only shrink a
-    // little. Rebuilt when the window size asks for a different multiple. False if it cannot be
-    // had, and the caller falls back to one plain pass.
-    bool update_prescale() {
-        int output_width = 0, output_height = 0;
-        if (!ipod::video::presentation_size(renderer_, &output_width, &output_height)) {
-            return false;
-        }
-        // Whole multiples of *what the renderer handed over*, which is 320x240 only at render
-        // scale 1. Measuring against the game's own size would prescale an already enlarged
-        // picture by the same factor again.
-        const int wanted =
-            std::clamp(std::max((output_width + texture_width_ - 1) / texture_width_,
-                                (output_height + texture_height_ - 1) / texture_height_),
-                       1, MAX_PRESCALE);
-        if (prescale_ != nullptr && prescale_factor_ == wanted &&
-            prescale_source_width_ == texture_width_) {
-            return true;
-        }
-        if (prescale_ != nullptr) {
-            SDL_DestroyTexture(prescale_);
-        }
-        prescale_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_TARGET,
-                                      texture_width_ * wanted, texture_height_ * wanted);
-        prescale_factor_ = prescale_ == nullptr ? 0 : wanted;
-        prescale_source_width_ = texture_width_;
-        if (prescale_ == nullptr) {
-            return false;
-        }
-        SDL_SetTextureScaleMode(prescale_, SDL_SCALEMODE_LINEAR);
-        return true;
+        presenter_.set_options({settings().scaling, settings().pixel_perfect});
     }
 
     void set_show_frame_rate(bool show) {
@@ -1254,16 +1101,9 @@ private:
 
     SDL_Window* window_ = nullptr;
     SDL_Renderer* renderer_ = nullptr;
-    SDL_Texture* texture_ = nullptr;
-    int texture_width_ = 0;
-    int texture_height_ = 0;
-    int prescale_source_width_ = 0;
-    SDL_Texture* reduce_[2] = {nullptr, nullptr};
-    std::pair<int, int> reduce_size_[2] = {{0, 0}, {0, 0}};
+    ipod::video::Presenter presenter_;
     bool fullscreen_ = false;
-    unsigned paced_rate_;              // the rate L goes back to from unlocked
-    SDL_Texture* prescale_ = nullptr;  // Sharp's whole-number intermediate
-    int prescale_factor_ = 0;
+    unsigned paced_rate_;  // the rate L goes back to from unlocked
 
     Uint64 next_frame_ns_ = 0;
     bool swallow_next_text_ = false;  // the press that produced this text was a control

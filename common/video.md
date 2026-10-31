@@ -1,60 +1,72 @@
 # Shared desktop video presentation
 
-All seven desktop hosts allow arbitrary window sizes. The game frame stays
-centered, preserves its aspect ratio, and fits completely inside the drawable.
-Unused space is black. Resizing changes presentation, not game coordinates,
-click-wheel input, chart timing, or the renderer's configured internal resolution.
+Phase, Vortex, Cubis2, HoldEm, Lost, Sims Bowling, and Mini Golf use the same
+`ipod::video::Presenter`. It owns RGB24 uploads, texture caching, filtering,
+reduction, aspect fitting, black borders, and screenshot readback. Game adapters
+provide frames, window events, and saved options; none has a separate scaling
+implementation. Window resizing changes presentation, not game coordinates,
+click-wheel input, chart timing, or internal rendering resolution.
 
-The six SDL games keep Nearest, Smooth, and Sharp scaling. Pixel-perfect mode
-fits a whole-number enlargement inside the window rather than snapping the window
-itself to a different size. The existing size shortcuts and fullscreen controls
-still work. Phase uses smooth GPU texture scaling and supports the ordinary
-Windows resize/maximize controls. Its default client size remains 320×240 so
-native-resolution diagnostic screenshots remain comparable.
+## Player options
 
-## Reuse
+All seven desktop hosts accept **F6** to cycle Sharp → Nearest → Smooth and **F7**
+to toggle integer scaling. Choices persist through each host's settings store.
+The six existing settings windows offer the same choices. Phase shows the active
+filter and Fit/Integer mode in its title. Repeated or modified shortcuts are ignored.
 
-- `src/ipod/platform/video.h`: dependency-free aspect-fit rectangle calculation.
-  Handles wide, tall, small, odd-sized, and zero-sized/minimized outputs.
-- `src/ipod/platform/sdl3/presentation.h`: shared SDL logical presentation policy
-  and physical content size query. Call `configure_presentation` on the window
-  target; use `presentation_size` to size intermediate scaling textures. SDL's
-  current-render-output query returns logical dimensions when enabled, so it
-  cannot be used as the physical magnification size.
-- `src/ipod/platform/opengl_presenter.{h,cpp}`: reusable RGB24 presenter for a
-  desktop OpenGL 1.1 compatibility context. The host supplies source and drawable
-  dimensions and performs the swap. Call `release()` before destroying the
-  context. Compile this source and link the platform's OpenGL library; Phase's
-  build shows that integration without adding an SDL dependency.
+- **Sharp** (default): enlarge to whole pixel blocks, then smoothly fit those
+  blocks to the window. Edges stay clearer at fractional window sizes.
+- **Nearest**: enlarge with hard pixel blocks. Fractional sizes can make adjacent
+  blocks different widths.
+- **Smooth**: bilinear enlargement, with softer edges.
+- **Integer scaling**: prefer a whole-number enlargement, leaving more black
+  border when necessary. The presenter falls back to fractional fitting when
+  the window is smaller than the logical frame; it does not force a larger window.
 
-The OpenGL presenter reuses one texture and a padded upload buffer. Copied edge
-texels prevent filtering against unused storage; power-of-two storage also works
-with Windows' legacy OpenGL fallback. It clears the entire drawable each frame,
-then draws the fitted image, preserving the game's GL state. At native size the
-existing Phase menu text mask remains identical. Phase's screenshots now include
-the entire drawable, including bars, at its current size.
+All filters average reductions in successive halves, then fit the result. This
+preserves detail when a game's internal renderer supplies a larger frame than
+the display area. Sharp's intermediate enlargement is capped at eight times the
+source size. Intermediate textures are reused and recreated when either dimension
+changes. Resizing never snaps the window to a different size.
 
-The live test also reached Phase's previously unmapped idle dim command,
-`miscTBD[3]`, at native LR `0x1807ED44`. Firmware `0x0829EF5C` delegates to
-`0x08197184`: a nonzero argument temporarily caps display brightness at 20;
-zero restores the chosen brightness. The adapter now handles this without
-altering that setting or Windows monitor brightness. Pixel tests cover dimming
-and restoration; an 8,000-frame native replay reaches both idle and wake calls.
-Firmware/image provenance is in Phase's analysis documents.
+## Integration
 
-SDL intermediate targets retain their own presentation state. The shared helper
-uses the actual content rectangle for window targets and physical target size
-when logical presentation is disabled, preventing duplicate letterboxing and
-avoiding unnecessarily large Sharp/reduction textures in wide windows.
+`src/ipod/platform/video_options.h` defines the shared enum, labels, and defaults
+without an SDL dependency. Existing game settings retain their serialized keys.
+`src/ipod/platform/sdl3/presenter.{h,cpp}` implements the presenter; CMake exports
+its source through `IPOD_CORE_SDL3_SOURCES`. Phase's Windows build links the same
+source and SDL3 library, and copies the SDL DLL and license beside its executable.
+
+Attach a dedicated `SDL_Renderer` with the game's logical dimensions, set options,
+then call `present(rgb, width, height)` on the main thread. The presenter owns its
+textures but borrows the renderer: call `reset()` before destroying that renderer.
+`capture()` redraws the last uploaded frame before readback, because SDL invalidates
+the backbuffer after presentation. The caller owns the returned `SDL_Surface`.
+Readback includes the full drawable and black borders.
+
+`presentation.h` handles SDL logical presentation and physical content dimensions.
+Offscreen targets disable logical presentation, avoiding double letterboxing.
+The independent `video.h` rectangle calculation is used as a test reference.
+
+Phase converts its original software RGB565 framebuffer to RGB24 and applies
+emulated brightness before calling the shared presenter. It retains a **hidden
+OpenGL compatibility context only for original SDK state and queries**. That
+context never displays or scales the game. SDL owns the visible window and input;
+the adapter restores the SDK context after presentation and before SDK GL calls.
+Audio remains on XAudio2 and Media Foundation.
+
+Phase stores versioned host video options under the `host/video` record in its
+existing atomic save snapshot. Native profile/score formats are unchanged, and
+default settings create no extra record until the player changes an option.
 
 API references:
 [SDL logical presentation](https://wiki.libsdl.org/SDL3/SDL_SetRenderLogicalPresentation),
 [SDL content rectangle](https://wiki.libsdl.org/SDL3/SDL_GetRenderLogicalPresentationRect),
-and the [SDL 3.4.16 renderer implementation](https://github.com/libsdl-org/SDL/blob/release-3.4.16/src/render/SDL_render.c).
+[SDL screenshot timing](https://wiki.libsdl.org/SDL3/SDL_RenderReadPixels).
 
 ## Verification
 
-The standalone shared test uses authored white frames and SDL's software backend:
+Run the standalone shared tests without proprietary game assets:
 
 ```powershell
 cmake -S common/tests -B build-video -DSDL3_DIR=C:/SDK/SDL3/cmake
@@ -62,15 +74,18 @@ cmake --build build-video --config Release
 ctest --test-dir build-video -C Release --output-on-failure
 ```
 
-This also compiles all six SDL platform adapters without proprietary assets.
-Tests inspect content and bar pixels after successive wide, tall, odd-sized,
-smaller-than-native, and native resizes; they check integer scaling and switching
-between window and intermediate targets.
+This compiles all six desktop adapters and their settings implementations. The
+shared renderer test uses authored white frames, sharp edges, and checkerboards
+to check all filters, black bars, successive resizes, integer scaling, reduction,
+height-only source changes, target isolation, and shortcut handling.
 
-Phase's `test_host.py` checks real Win32 client resizing and GPU readback with
-authored colored quadrants, including orientation, smooth interpolation, every
-bar pixel, screenshot dimensions, and restoration of game GL state. Its native
-menu verifier additionally checks the original game's image at 320×240.
-The live Phase window was maximized and restored on Windows 11. Other titles'
-adapters compile and the shared SDL backend is exercised; this does not claim a
-complete gameplay replay of all six other games or validation on every OS/GPU.
+Phase's authored host test exercises its actual SDL window and renderer, preserved
+SDK GL state, SDL keyboard delivery, filter shortcuts, options across restarts,
+resized screenshots, and dim/restore behavior. Native startup verification
+compares registers, memory, SDK calls, and pixels with ARM execution. Menu,
+persistence, and
+audible Hard gameplay replays check the integration with the original game.
+
+These checks do not constitute full gameplay verification of the other six
+titles or validation on every OS/GPU. Their adapters compile; presentation runs
+through the tested shared implementation.

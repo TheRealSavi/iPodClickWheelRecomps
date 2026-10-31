@@ -5,6 +5,8 @@
 #include "keyboard.h"
 #include "runtime/memory.h"
 
+#include <SDL3/SDL.h>
+
 // clang-format off
 #include <windows.h>
 #include <GL/gl.h>
@@ -317,20 +319,69 @@ int test_host(const std::filesystem::path& assets) {
     require(ld32(destination) == 0x1e01, "presentation altered texture mode");
     // Exercise real drawable resizes in both directions. Python verifies the
     // captured content bounds, black bars, orientation and interpolation.
-    const auto window = WindowFromDC(wglGetCurrentDC());
+    int window_count = 0;
+    auto** windows = SDL_GetWindows(&window_count);
+    require(window_count == 1, "expected one SDL display window");
+    auto* window = windows[0];
+    SDL_free(windows);
     require(window != nullptr, "current presentation window missing");
-    require((GetWindowLongW(window, GWL_STYLE) & WS_THICKFRAME) != 0,
+    require((SDL_GetWindowFlags(window) & SDL_WINDOW_RESIZABLE) != 0,
             "game window cannot be resized");
+    const auto send_key = [&](SDL_Scancode scan, bool down) {
+        SDL_Event event{};
+        event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+        event.key.windowID = SDL_GetWindowID(window);
+        event.key.scancode = scan;
+        event.key.down = down;
+        require(SDL_PushEvent(&event), "queue SDL key");
+        require(phase::host::pump(), "pump SDL key");
+    };
+    send_key(SDL_SCANCODE_W, true);
+    send_key(SDL_SCANCODE_W, false);
+    phase::host::begin_frame(context);
+    node = ld32(context + 0x30);
+    require(node && ld8(node) == 1 && ld8(node + 1) == 2, "SDL Menu input mapping");
+    phase::host::begin_frame(context);
+    for (const auto [scan, button] :
+         std::array<std::pair<SDL_Scancode, unsigned>, 5>{{{SDL_SCANCODE_A, 3},
+                                                           {SDL_SCANCODE_S, 2},
+                                                           {SDL_SCANCODE_D, 4},
+                                                           {SDL_SCANCODE_X, 5},
+                                                           {SDL_SCANCODE_RETURN, 2}}}) {
+        send_key(scan, true);
+        send_key(scan, false);
+        phase::host::begin_frame(context);
+        node = ld32(context + 0x30);
+        require(node && ld8(node) == button && ld8(node + 1) == 2, "SDL button press mapping");
+        node = ld32(node + 8);
+        require(node && ld8(node) == button && ld8(node + 1) == 1 && !ld32(node + 8),
+                "SDL button release mapping");
+        phase::host::begin_frame(context);
+    }
+    send_key(SDL_SCANCODE_SEMICOLON, true);
+    phase::host::begin_frame(context);
+    call("InputEvents", 0, {destination, destination + 4, 0, 0});
+    require(ld32(destination + 4) == 0x40000000 && !ld32(context + 0x30),
+            "semicolon touches right without Next");
+    SDL_Event focus{};
+    focus.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+    focus.window.windowID = SDL_GetWindowID(window);
+    require(SDL_PushEvent(&focus) && phase::host::pump(), "focus loss delivery");
+    phase::host::begin_frame(context);
+    call("InputEvents", 0, {destination, destination + 4, 0, 0});
+    require(!(ld32(destination + 4) & 0x40000000), "focus loss releases wheel");
+    require(std::strstr(SDL_GetWindowTitle(window), "Sharp | Fit"), "shared default scaling");
+    send_key(SDL_SCANCODE_F6, true);
+    require(std::strstr(SDL_GetWindowTitle(window), "Nearest | Fit"), "shared Nearest shortcut");
+    send_key(SDL_SCANCODE_F6, true);
+    require(std::strstr(SDL_GetWindowTitle(window), "Smooth | Fit"), "shared Smooth shortcut");
     for (unsigned y = 0; y < 240; ++y)
         for (unsigned x = 0; x < 320; ++x)
             st16(buffer + (y * 320 + x) * 2,
                  y < 120 ? (x < 160 ? 0xf800 : 0x07e0) : (x < 160 ? 0x001f : 0xffff));
     for (const auto [width, height] : std::array<std::pair<int, int>, 5>{
              {{960, 540}, {500, 900}, {319, 241}, {160, 120}, {320, 240}}}) {
-        RECT rect{0, 0, width, height};
-        AdjustWindowRect(&rect, DWORD(GetWindowLongW(window, GWL_STYLE)), FALSE);
-        require(SetWindowPos(window, nullptr, 0, 0, rect.right - rect.left, rect.bottom - rect.top,
-                             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) != 0,
+        require(SDL_SetWindowSize(window, width, height) && SDL_SyncWindow(window),
                 "test resize failed");
         call("OpenGLES", 165, {1, 1, 0, 0});
         phase::host::screenshot(
@@ -345,6 +396,28 @@ int test_host(const std::filesystem::path& assets) {
     phase::host::screenshot(assets / "idle-restored.ppm");
     Cpu cpu{};
     require(!phase::host::service(cpu, "OpenGLES", 129), "unverified GPU upload accepted");
+    phase::host::close();
+    // A fresh store, outside the read-only asset root, round-trips host options
+    // through the same durable snapshot used for profiles and scores.
+    const auto video_assets = assets / "video-assets";
+    const auto video_saves = assets / "video-saves";
+    std::filesystem::create_directory(video_assets);
+    const auto reopen = [&] {
+        phase::host::initialize(video_assets, false, false, {}, video_saves);
+        auto** reopened = SDL_GetWindows(&window_count);
+        require(window_count == 1, "reopened display window");
+        window = reopened[0];
+        SDL_free(reopened);
+    };
+    reopen();
+    require(std::strstr(SDL_GetWindowTitle(window), "Sharp | Fit"), "fresh video defaults");
+    send_key(SDL_SCANCODE_F6, true);
+    send_key(SDL_SCANCODE_F7, true);
+    require(std::strstr(SDL_GetWindowTitle(window), "Nearest | Integer"), "video options changed");
+    phase::host::close();
+    reopen();
+    require(std::strstr(SDL_GetWindowTitle(window), "Nearest | Integer"),
+            "video options survived restart");
     phase::host::close();
     std::puts(
         "PASS: asset IO, queued completions, path containment, integer color, presentation state");

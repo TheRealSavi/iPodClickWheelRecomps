@@ -5,7 +5,7 @@
 #include "host.h"
 
 #include "audio.h"
-#include "ipod/platform/opengl_presenter.h"
+#include "ipod/platform/sdl3/presenter.h"
 #include "keyboard.h"
 #include "library.h"
 #include "persistence.h"
@@ -32,7 +32,9 @@ HDC dc = nullptr;
 HGLRC rendering = nullptr;
 bool quitting = false;
 input::Keyboard keyboard;
-ipod::video::OpenGLPresenter presenter;
+ipod::video::Presenter presenter;
+SDL_Window* display_window = nullptr;
+SDL_Renderer* display_renderer = nullptr;
 constexpr uint32_t input_nodes = 0x11001000;
 std::filesystem::path asset_root;
 std::vector<uint32_t> completions;
@@ -83,26 +85,46 @@ uint32_t expose_profile(const persistence::Profile& profile) {
     }
     fatal("profile handle limit exceeded");
 }
-LRESULT CALLBACK window_proc(HWND handle, UINT message, WPARAM w, LPARAM l) {
-    if (message == WM_CLOSE) {
-        quitting = true;
+void video_title() {
+    const auto options = presenter.options();
+    const std::string title =
+        std::string("Phase - ") + ipod::video::scaling_label(options.scaling) +
+        (options.pixel_perfect ? " | Integer" : " | Fit") + " | F6: filter, F7: integer scaling";
+    SDL_SetWindowTitle(display_window, title.c_str());
+}
+unsigned physical_scan(SDL_Scancode scan) {
+    switch (scan) {
+    case SDL_SCANCODE_W:
+        return 0x11;
+    case SDL_SCANCODE_A:
+        return 0x1e;
+    case SDL_SCANCODE_S:
+        return 0x1f;
+    case SDL_SCANCODE_D:
+        return 0x20;
+    case SDL_SCANCODE_X:
+        return 0x2d;
+    case SDL_SCANCODE_RETURN:
+        return 0x1c;
+    case SDL_SCANCODE_O:
+        return 0x18;
+    case SDL_SCANCODE_P:
+        return 0x19;
+    case SDL_SCANCODE_SEMICOLON:
+        return 0x27;
+    case SDL_SCANCODE_SLASH:
+        return 0x35;
+    case SDL_SCANCODE_PERIOD:
+        return 0x34;
+    case SDL_SCANCODE_COMMA:
+        return 0x33;
+    case SDL_SCANCODE_K:
+        return 0x25;
+    case SDL_SCANCODE_I:
+        return 0x17;
+    default:
         return 0;
     }
-    if (message == WM_KEYDOWN && w == VK_ESCAPE) {
-        quitting = true;
-        return 0;
-    }
-    if (message == WM_KEYDOWN || message == WM_KEYUP) {
-        auto scan = unsigned((l >> 16) & 255);
-        // Accessibility/SendInput virtual-key events can omit the scan code.
-        if (!scan)
-            scan = MapVirtualKeyW(UINT(w), MAPVK_VK_TO_VSC);
-        key(scan, message == WM_KEYDOWN);
-        return 0;
-    }
-    if (message == WM_KILLFOCUS)
-        keyboard.release_all();
-    return DefWindowProcW(handle, message, w, l);
 }
 std::filesystem::path asset_path(std::string name) {
     std::replace(name.begin(), name.end(), '\\', '/');
@@ -262,6 +284,10 @@ bool file_service(Cpu& cpu, unsigned ordinal) {
     return false;
 }
 bool graphics(Cpu& cpu, unsigned ordinal) {
+    // SDL may use its own GL context; original SDK queries always use this
+    // separate compatibility context, which never presents the displayed image.
+    if (!wglMakeCurrent(dc, rendering))
+        fatal("OpenGL compatibility context unavailable");
     const auto a = [&](unsigned i) { return arg(cpu, i); };
     switch (ordinal) {
     case 0:
@@ -360,10 +386,10 @@ bool graphics(Cpu& cpu, unsigned ordinal) {
             rgb[i * 3 + 1] = uint8_t(((p >> 5) & 63) * 255 / 63 * scale / 100);
             rgb[i * 3 + 2] = uint8_t((p & 31) * 255 / 31 * scale / 100);
         }
-        RECT client{};
-        GetClientRect(window, &client);
-        presenter.present(rgb.data(), 320, 240, client.right, client.bottom);
-        SwapBuffers(dc);
+        if (!presenter.present(rgb.data(), 320, 240))
+            fatal("Video presentation failed: %s", SDL_GetError());
+        if (!wglMakeCurrent(dc, rendering))
+            fatal("OpenGL compatibility context restore failed");
         cpu.r[0] = 1;
         return true;
     }
@@ -383,17 +409,40 @@ void initialize(const std::filesystem::path& assets, bool visible, bool sound,
     if (!music_root.empty())
         library::open(music_root);
     asset_root = std::filesystem::canonical(assets);
+    if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
+        fatal("SDL video unavailable: %s", SDL_GetError());
+    if (!SDL_CreateWindowAndRenderer("Phase", 320, 240,
+                                     SDL_WINDOW_RESIZABLE | (visible ? 0 : SDL_WINDOW_HIDDEN),
+                                     &display_window, &display_renderer))
+        fatal("SDL window unavailable: %s", SDL_GetError());
+    presenter.attach(display_renderer, 320, 240);
+    ipod::video::Options options;
+    const auto saved = storage.state().records.find({2, "host/video"});
+    if (saved != storage.state().records.end()) {
+        const auto& bytes = saved->second;
+        if (bytes.size() == 3 && bytes[0] == 1 && bytes[1] < ipod::video::SCALING_COUNT &&
+            bytes[2] <= 1)
+            options = {static_cast<ipod::video::Scaling>(bytes[1]), bytes[2] != 0};
+        else
+            std::fprintf(stderr, "VIDEO: unrecognized saved options; using defaults\n");
+    }
+    presenter.set_options(options);
+    video_title();
+    SDL_SetRenderDrawColor(display_renderer, 0, 0, 0, 255);
+    SDL_RenderClear(display_renderer);
+    SDL_RenderPresent(display_renderer);
+    // Hidden SDK state only; the SDL presenter owns the visible window.
     WNDCLASSW wc{};
     wc.style = CS_OWNDC;
-    wc.lpfnWndProc = window_proc;
+    wc.lpfnWndProc = DefWindowProcW;
     wc.hInstance = GetModuleHandleW(nullptr);
-    wc.lpszClassName = L"PhaseBringup";
+    wc.lpszClassName = L"PhaseSdkCompatibility";
     if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
         fatal("RegisterClass failed");
     const DWORD style = WS_OVERLAPPEDWINDOW;
     RECT rect{0, 0, 320, 240};
     AdjustWindowRect(&rect, style, FALSE);
-    window = CreateWindowW(wc.lpszClassName, L"Phase - Windows bring-up", style, CW_USEDEFAULT,
+    window = CreateWindowW(wc.lpszClassName, L"Phase SDK compatibility", style, CW_USEDEFAULT,
                            CW_USEDEFAULT, rect.right - rect.left, rect.bottom - rect.top, nullptr,
                            nullptr, wc.hInstance, nullptr);
     if (!window)
@@ -414,8 +463,6 @@ void initialize(const std::filesystem::path& assets, bool visible, bool sound,
     if (!rendering || !wglMakeCurrent(dc, rendering))
         fatal("OpenGL context unavailable");
     glViewport(0, 0, 320, 240);
-    if (visible)
-        ShowWindow(window, SW_SHOW);
 }
 bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
     if (std::strcmp(framework, "DebugUtil") == 0 && ordinal == 4) {
@@ -584,39 +631,63 @@ void key(unsigned scan, bool down) {
     keyboard.key(scan, down);
 }
 bool pump() {
-    MSG message;
-    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
-        TranslateMessage(&message);
-        DispatchMessageW(&message);
+    SDL_Event event{};
+    while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_EVENT_QUIT ||
+            (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
+             event.window.windowID == SDL_GetWindowID(display_window)))
+            quitting = true;
+        else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST &&
+                 event.window.windowID == SDL_GetWindowID(display_window))
+            keyboard.release_all();
+        else if ((event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) &&
+                 event.key.windowID == SDL_GetWindowID(display_window)) {
+            if (presenter.handle_shortcut(event)) {
+                const auto options = presenter.options();
+                storage.write("host/video",
+                              {1, static_cast<uint8_t>(options.scaling),
+                               static_cast<uint8_t>(options.pixel_perfect)},
+                              2);
+                video_title();
+            } else if (!event.key.repeat) {
+                if (event.key.scancode == SDL_SCANCODE_ESCAPE && event.key.down)
+                    quitting = true;
+                else if (const auto scan = physical_scan(event.key.scancode))
+                    key(scan, event.type == SDL_EVENT_KEY_DOWN);
+            }
+        }
     }
     return !quitting;
 }
 void screenshot(const std::filesystem::path& path) {
-    if (!rendering)
-        fatal("screenshot requires a graphics context");
-    RECT client{};
-    GetClientRect(window, &client);
-    const int width = client.right, height = client.bottom;
-    if (width <= 0 || height <= 0) {
-        // Optional diagnostics must not prevent the native shutdown save.
+    int width = 0, height = 0;
+    if (!display_window || !SDL_GetWindowSizeInPixels(display_window, &width, &height) ||
+        width <= 0 || height <= 0) {
         std::fprintf(stderr, "SCREENSHOT skipped: window has no drawable area\n");
         return;
     }
-    std::vector<uint8_t> pixels(size_t(width) * size_t(height) * 3);
-    glReadBuffer(GL_FRONT);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
+    auto* captured = presenter.capture();
+    auto* rgb = captured ? SDL_ConvertSurface(captured, SDL_PIXELFORMAT_RGB24) : nullptr;
+    SDL_DestroySurface(captured);
+    wglMakeCurrent(dc, rendering);
+    if (!rgb)
+        fatal("Screenshot failed: %s", SDL_GetError());
     std::ofstream out(path, std::ios::binary);
-    out << "P6\n" << width << " " << height << "\n255\n";
-    for (int y = height - 1; y >= 0; --y)
-        out.write(reinterpret_cast<const char*>(pixels.data() + size_t(y) * size_t(width) * 3),
-                  width * 3);
+    out << "P6\n" << rgb->w << " " << rgb->h << "\n255\n";
+    for (int y = 0; y < rgb->h; ++y)
+        out.write(static_cast<const char*>(rgb->pixels) + size_t(y) * rgb->pitch, rgb->w * 3);
+    SDL_DestroySurface(rgb);
     if (!out)
         fatal("could not write screenshot");
 }
 void close() {
+    presenter.reset();
+    SDL_DestroyRenderer(display_renderer);
+    display_renderer = nullptr;
+    SDL_DestroyWindow(display_window);
+    display_window = nullptr;
+    SDL_QuitSubSystem(SDL_INIT_VIDEO);
     if (rendering) {
-        presenter.release();
         wglMakeCurrent(nullptr, nullptr);
         wglDeleteContext(rendering);
         rendering = nullptr;

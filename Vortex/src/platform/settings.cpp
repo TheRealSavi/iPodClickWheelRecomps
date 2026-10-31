@@ -26,13 +26,12 @@ Settings current;
 struct ScalingName {
     Scaling scaling;
     const char* key;
-    const char* label;
 };
 
 constexpr ScalingName NAMES[SCALING_COUNT] = {
-    {Scaling::Sharp, "sharp", "Sharp"},
-    {Scaling::Nearest, "nearest", "Nearest"},
-    {Scaling::Smooth, "smooth", "Smooth"},
+    {Scaling::Sharp, "sharp"},
+    {Scaling::Nearest, "nearest"},
+    {Scaling::Smooth, "smooth"},
 };
 
 // The `format` line's number, or 0 for a file that has none.
@@ -51,15 +50,6 @@ unsigned format_of(const std::string& text) {
 }
 
 }  // namespace
-
-const char* scaling_label(Scaling scaling) {
-    for (const ScalingName& name : NAMES) {
-        if (name.scaling == scaling) {
-            return name.label;
-        }
-    }
-    return NAMES[0].label;
-}
 
 Settings& settings() {
     return current;

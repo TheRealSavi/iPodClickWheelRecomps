@@ -6,6 +6,8 @@
 // The game itself knows nothing about any of this. Nothing here reaches the recompiled code.
 #pragma once
 
+#include "ipod/platform/video_options.h"
+
 #include <string>
 
 namespace cubis::platform {
@@ -14,15 +16,11 @@ namespace cubis::platform {
 // draws into that buffer and nowhere else — the rasteriser is fixed at the iPod's resolution
 // (libeapp/gles.h) — so this is a choice about the last step only, not about detail the game
 // never drew.
-enum class Scaling {
-    Sharp,    // prescaled by a whole number, then smoothed to fit: even pixels, clean edges
-    Nearest,  // hard pixel blocks, uneven where the window is not a whole multiple
-    Smooth,   // plain bilinear: soft, and softer the larger the window
-};
-constexpr unsigned SCALING_COUNT = 3;
+using ipod::video::Scaling;
+using ipod::video::SCALING_COUNT;
 
 // In the order above, for a settings UI to offer.
-[[nodiscard]] const char* scaling_label(Scaling scaling);
+using ipod::video::scaling_label;
 
 // How many raster pixels the game gets for each of its own. See gfx::set_render_scale: the game
 // is never told, and a 1:1 sprite blit still enlarges as whole blocks, so what this buys is

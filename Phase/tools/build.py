@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -14,7 +15,24 @@ def main() -> None:
     parser.add_argument(
         "--vcvars", type=Path, help="explicit vcvars64.bat; otherwise use vswhere"
     )
+    parser.add_argument(
+        "--sdl-root",
+        type=Path,
+        default=Path(os.environ.get("SDL3_ROOT", PROJECT / "build/deps/SDL3-3.4.16")),
+        help="SDL3 Visual C++ SDK root (or SDL3_ROOT environment variable)",
+    )
     args = parser.parse_args()
+    sdl = args.sdl_root.resolve()
+    for relative in (
+        "include/SDL3/SDL.h",
+        "lib/x64/SDL3.lib",
+        "lib/x64/SDL3.dll",
+        "LICENSE.txt",
+    ):
+        if not (sdl / relative).is_file():
+            raise SystemExit(
+                f"Missing {sdl / relative}. Install the SDL3 VC SDK and pass --sdl-root."
+            )
     vcvars = args.vcvars
     if vcvars is None:
         vswhere = (
@@ -60,10 +78,11 @@ def main() -> None:
         f'/I"{PROJECT.parent / "common/src"}"',
         f'/I"{PROJECT / "src"}"',
         f'/I"{PROJECT / "gen"}"',
+        f'/I"{sdl / "include"}"',
         *[f'"{p}"' for p in sources],
         f'"{PROJECT / "src/main.cpp"}"',
         f'"{PROJECT / "src/host.cpp"}"',
-        f'"{PROJECT.parent / "common/src/ipod/platform/opengl_presenter.cpp"}"',
+        f'"{PROJECT.parent / "common/src/ipod/platform/sdl3/presenter.cpp"}"',
         f'"{PROJECT / "src/keyboard.cpp"}"',
         f'"{PROJECT / "src/library.cpp"}"',
         f'"{PROJECT / "src/audio.cpp"}"',
@@ -79,6 +98,7 @@ def main() -> None:
         "mfuuid.lib",
         "ole32.lib",
         "xaudio2.lib",
+        f'"{sdl / "lib/x64/SDL3.lib"}"',
         "/Fe:phase-startup.exe",
         "/Fo:obj\\",
     ]
@@ -100,6 +120,8 @@ def main() -> None:
     if result.returncode:
         print((build / "build.log").read_text(errors="replace")[-8000:])
         raise SystemExit(result.returncode)
+    shutil.copy2(sdl / "lib/x64/SDL3.dll", build / "SDL3.dll")
+    shutil.copy2(sdl / "LICENSE.txt", build / "SDL3-LICENSE.txt")
     print(build / "phase-startup.exe")
 
 

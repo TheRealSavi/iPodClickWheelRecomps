@@ -19,8 +19,9 @@ You don't build this on its own. Each game pulls it in as a subdirectory (`ipod_
 The rule for what earns a place in here: if two games differ because of a real, measured fact about their binaries, that stays with each game and gets passed in as a setting. If they only differ because one got fixed and the other didn't, that's not really either game's, and it belongs here.
 
 Resizable desktop windows use [shared video presentation](video.md) to preserve
-the frame's aspect ratio with black bars. SDL games retain their scaling choices;
-Phase uses the shared desktop OpenGL RGB presenter.
+the frame's aspect ratio with black bars. All seven desktop hosts, including
+Phase, use one SDL presenter with shared Sharp, Nearest, Smooth, and integer
+scaling options.
 
 ## Licence
 

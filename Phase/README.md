@@ -14,13 +14,16 @@ in this repository.
 
 ## Build and run on Windows
 
-Requirements: UV, Python 3.12 or newer, and Visual Studio 2022 C++ x64 Build Tools.
+Requirements: UV, Python 3.12 or newer, Visual Studio 2022 C++ x64 Build Tools,
+and the [SDL3 Visual C++ development SDK](https://github.com/libsdl-org/SDL/releases).
+The tested SDK is 3.4.16. Extract it to `Phase/build/deps/SDL3-3.4.16`, set
+`SDL3_ROOT`, or pass `--sdl-root C:/SDK/SDL3` to the build command. The build copies
+`SDL3.dll` and its license beside the executable; keep the DLL there when running.
 The build script locates MSVC with `vswhere`; `--vcvars PATH` can override it.
-The host uses Windows' built-in OpenGL compatibility renderer and system
-libraries. Media Foundation decodes music; XAudio2 mixes it with the game's PCM
-sound effects. No additional C++ runtime package is required. Windows N editions
-need the Media Feature Pack. The shared SDL decoder uses the same Windows codec,
-but this host uses XAudio2 directly to retain its existing Win32 window.
+The host uses the same SDL video presenter as the other desktop games. A hidden
+Windows OpenGL context implements original SDK state queries only. Media Foundation
+decodes music; XAudio2 mixes it with the game's PCM sound effects. Windows N
+editions need the Media Feature Pack.
 
 From the repository root, substitute the path to your own decrypted executable:
 
@@ -44,10 +47,12 @@ uv run --python 3.12 python Phase/tools/run.py `
 
 Escape or the window's Close button exits. Without `--visible`, rendering uses
 a hidden window, useful for verification. Screenshots are uncompressed PPM files.
-Drag the window edges or maximize it to enlarge the game. Shared GPU presentation
-smoothly scales the native 320×240 frame, preserves its aspect ratio, and fills
-unused space with black bars. Screenshots include the complete resized window's
-client area. See [shared video presentation](../common/video.md).
+Drag the window edges or maximize it to enlarge the game. The shared presenter
+preserves the native 320×240 frame's aspect ratio and fills unused space with
+black bars. **F6** cycles Sharp (default), Nearest, and Smooth; **F7** toggles
+integer scaling. The title shows the current choices, which save with your local
+profiles between launches. Screenshots include the complete resized client area.
+See [shared video presentation](../common/video.md).
 The graphical default is 300 frames; `--frames` accepts 1–36,000. This bounded
 preview uses real elapsed time and a 60 Hz callback limit with `--audio`.
 Without that flag it retains silent, deterministic diagnostic behavior.

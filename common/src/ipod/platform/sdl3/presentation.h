@@ -9,6 +9,12 @@ namespace ipod::video {
 // own disabled logical presentation, so the image is letterboxed only once.
 inline bool configure_presentation(SDL_Renderer* renderer, int width, int height,
                                    bool integer_scale) {
+    int output_width = 0, output_height = 0;
+    if (!SDL_GetRenderOutputSize(renderer, &output_width, &output_height))
+        return false;
+    // SDL's integer mode keeps at least 1x and crops smaller windows. Preserve
+    // the full game frame there by falling back to a fractional fit.
+    integer_scale = integer_scale && output_width >= width && output_height >= height;
     return SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255) &&
            SDL_SetRenderLogicalPresentation(renderer, width, height,
                                             integer_scale ? SDL_LOGICAL_PRESENTATION_INTEGER_SCALE
