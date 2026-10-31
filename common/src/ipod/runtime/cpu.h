@@ -22,6 +22,16 @@
 
 namespace ipod {
 
+// ARMv5 CLZ is defined for zero and does not modify condition flags.
+constexpr uint32_t count_leading_zeros(uint32_t value) {
+    uint32_t count = 0;
+    while (count < 32 && (value & 0x80000000u) == 0) {
+        ++count;
+        value <<= 1;
+    }
+    return count;
+}
+
 // One bit of a word, by number. Defined here because the status-register helpers below need
 // it; the barrel shifter further down is its other user.
 constexpr bool bit(uint32_t value, unsigned n) {
@@ -41,9 +51,8 @@ struct Cpu {
     bool c = false;  // carry / not-borrow
     bool v = false;  // signed overflow
 
-    // The CPSR bits `msr CPSR_f` may write that are not N/Z/C/V — bits 27..24, unused on this
-    // core. Kept so that the save-and-restore pair armcc's soft-float library wraps its
-    // arithmetic in round-trips exactly, rather than approximately.
+    // CPSR bits 27..24: includes the sticky ARMv5TE Q flag. Preserve these through
+    // the library's MRS/MSR pairs; saturating/DSP instructions may set Q.
     uint32_t cpsr_spare = 0;
 
     // `mrs Rd, CPSR`: the whole status word.
@@ -62,6 +71,54 @@ struct Cpu {
         cpsr_spare = value & 0x0F00'0000u;
     }
 };
+
+inline int64_t saturate_signed_word(Cpu& cpu, int64_t value) {
+    if (value > 2147483647LL) {
+        cpu.cpsr_spare |= 0x08000000u;
+        return 2147483647LL;
+    }
+    if (value < -2147483648LL) {
+        cpu.cpsr_spare |= 0x08000000u;
+        return -2147483648LL;
+    }
+    return value;
+}
+
+inline uint32_t saturating_arithmetic(Cpu& cpu, uint32_t left, uint32_t right,
+                                     bool subtract, bool double_right) {
+    const int64_t a = static_cast<int32_t>(left);
+    int64_t b = static_cast<int32_t>(right);
+    if (double_right) b = saturate_signed_word(cpu, b * 2);
+    return static_cast<uint32_t>(saturate_signed_word(cpu, subtract ? a - b : a + b));
+}
+
+inline int64_t signed_half(uint32_t value, bool top) {
+    const uint32_t half = (value >> (top ? 16 : 0)) & 0xffffu;
+    return static_cast<int64_t>(half) - ((half & 0x8000u) ? 65536 : 0);
+}
+
+inline void signed_half_multiply(Cpu& cpu, unsigned kind, unsigned rd, unsigned rn,
+                                 uint32_t left, uint32_t right, bool x, bool y) {
+    int64_t product = (kind == 1 ? static_cast<int64_t>(static_cast<int32_t>(left))
+                                : signed_half(left, x)) * signed_half(right, y);
+    if (kind == 1) {
+        // Floor division matches arithmetic shift without relying on negative >>.
+        product = (product < 0 ? product - 65535 : product) / 65536;
+    }
+    if (kind == 2) {
+        const uint64_t previous = (static_cast<uint64_t>(cpu.r[rd]) << 32) | cpu.r[rn];
+        const uint64_t result = previous + static_cast<uint64_t>(product);
+        cpu.r[rn] = static_cast<uint32_t>(result);
+        cpu.r[rd] = static_cast<uint32_t>(result >> 32);
+    } else {
+        if (kind == 0 || (kind == 1 && !x)) {
+            product += static_cast<int32_t>(cpu.r[rn]);
+            if (product > 2147483647LL || product < -2147483648LL)
+                cpu.cpsr_spare |= 0x08000000u;
+        }
+        cpu.r[rd] = static_cast<uint32_t>(product);
+    }
+}
 
 // The one register file. Three things still touch it: the ARM-ABI shims the dispatch table lands
 // on, the guest stack pointer a `GuestScratch` moves, and an assert trap's register dump. In a

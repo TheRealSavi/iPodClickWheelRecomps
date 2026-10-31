@@ -19,7 +19,10 @@ namespace ipod {
 #define IPOD_PRINTF_FORMAT printf
 #endif
 [[noreturn]] void fatal(const char* format, ...)
-    __attribute__((format(IPOD_PRINTF_FORMAT, 1, 2)));
+#if defined(__GNUC__) || defined(__clang__)
+    __attribute__((format(IPOD_PRINTF_FORMAT, 1, 2)))
+#endif
+    ;
 
 // A platform may ask to be told before the program dies. On a desktop the message goes to the
 // terminal and that is the end of it; a console has no terminal behind it, so the platform needs

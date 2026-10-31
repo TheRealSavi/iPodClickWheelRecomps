@@ -38,8 +38,8 @@ DESCRIPTOR_LINK_OFFSET = 0x34
 DESCRIPTOR_THUNKS_OFFSET = 0x38
 
 # `ldr pc, [pc, #imm]` with any condition: the only instruction a thunk slot may contain.
-LDR_PC_PC_MASK = 0x0FFF_F000
-LDR_PC_PC_BITS = 0x059F_F000
+LDR_PC_PC_MASK = 0x0F7F_F000
+LDR_PC_PC_BITS = 0x051F_F000
 
 DEFAULT_LOAD_BASE = 0x1800_0000
 

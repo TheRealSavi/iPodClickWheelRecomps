@@ -130,6 +130,8 @@ def load_call_targets(edge_files: Iterable[Path], image: EAppImage) -> set[int]:
 
 
 def _is_call_site(instruction: int) -> bool:
+    if instruction & 0x0FFF_FFF0 == 0x012F_FF30:
+        return True  # blx rN, including lr (the destination is read before linking)
     if instruction & BRANCH_LINK_MASK == BRANCH_LINK_BITS:
         return True
     is_register_jump = (

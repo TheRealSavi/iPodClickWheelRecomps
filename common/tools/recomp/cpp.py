@@ -118,6 +118,14 @@ class FunctionEmitter:
         if role is Role.TRAP:
             return [f"assert_trap({hex_u32(insn.address)});"]
         if role is Role.INDIRECT_CALL:
+            if insn.op is Op.BX and insn.link:
+                return [
+                    "{",
+                    f"    const uint32_t target = {self._reg(insn.rm, insn)};",
+                    f"    cpu.r[LR] = {hex_u32(insn.next_address)};",
+                    "    call_indirect(target);",
+                    "}",
+                ]
             return [
                 f"call_indirect({self._reg(insn.rm if insn.op is Op.BX else insn.operand2.rm, insn)});"
             ]
@@ -138,10 +146,23 @@ class FunctionEmitter:
             return self._multiply_long(insn)
         if insn.op in (Op.LOAD_STORE, Op.LOAD_STORE_HALF):
             return self._load_store(insn)
+        if insn.op is Op.LOAD_STORE_DOUBLE:
+            return self._load_store_double(insn)
         if insn.op is Op.LOAD_STORE_MULTIPLE:
             return self._load_store_multiple(insn)
         if insn.op is Op.MRS:
             return [f"{self._dest(insn.rd)} = cpu.cpsr();"]
+        if insn.op is Op.CLZ:
+            return [f"{self._dest(insn.rd)} = ::ipod::count_leading_zeros({self._reg(insn.rm, insn)});"]
+        if insn.op is Op.SATURATE:
+            subtract = "true" if insn.name.endswith("sub") else "false"
+            double = "true" if insn.name.startswith("qd") else "false"
+            return [f"{self._dest(insn.rd)} = ::ipod::saturating_arithmetic(cpu, {self._reg(insn.rm, insn)}, "
+                    f"{self._reg(insn.rn, insn)}, {subtract}, {double});"]
+        if insn.op is Op.HALF_MUL:
+            kind, x, y = (insn.word >> 21) & 3, (insn.word >> 5) & 1, (insn.word >> 6) & 1
+            return [f"::ipod::signed_half_multiply(cpu, {kind}, {insn.rd}, {insn.rn}, "
+                    f"{self._reg(insn.rm, insn)}, {self._reg(insn.rs, insn)}, {x}, {y});"]
         if insn.op is Op.MSR:
             return [f"cpu.set_cpsr_flags({self._operand2_value(insn.operand2, insn)});"]
         if insn.op is Op.SVC:
@@ -310,6 +331,23 @@ class FunctionEmitter:
         return self._block(
             setup, [self._access(insn, "address"), f"{self._dest(insn.rn)} = address {sign} {offset};"]
         )
+
+    def _load_store_double(self, insn: Instruction) -> list[str]:
+        base = self._reg(insn.rn, insn)
+        offset = self._offset_value(insn.offset, insn)
+        sign = "+" if insn.add_offset else "-"
+        setup = [f"const uint32_t adjusted = {base} {sign} {offset};",
+                 f"const uint32_t address = {'adjusted' if insn.pre_indexed else base};"]
+        transfers = []
+        for index in range(2):
+            address = "address" if index == 0 else "address + 4u"
+            if insn.load:
+                transfers.append(f"{self._dest(insn.rd + index)} = ld32({address});")
+            else:
+                transfers.append(f"st32({address}, {self._reg(insn.rd + index, insn)});")
+        if insn.writeback:
+            transfers.append(f"{self._dest(insn.rn)} = adjusted;")
+        return self._block(setup, transfers)
 
     def _fold_literal_load(self, insn: Instruction) -> list[str] | None:
         """`ldr rX, [pc, #imm]` reads a constant from the literal pool; emit the constant itself."""

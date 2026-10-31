@@ -55,8 +55,11 @@ class JumpTable:
     # branch), 8 for `lsl #3` (two per case — armcc's unrolled loops step into a body whose
     # cases are pairs of instructions), and so on.
     stride: int = 4
+    absolute_targets: tuple[int, ...] = ()
 
     def case_target(self, index: int) -> int:
+        if self.absolute_targets:
+            return self.absolute_targets[index]
         return self.site + 8 + self.stride * index
 
 
@@ -145,6 +148,8 @@ def _classify(
         return Role.LOCAL_BRANCH, [insn.target] + _if_conditional(insn, fall_through)
 
     if insn.op is Op.BX:
+        if insn.link:
+            return Role.INDIRECT_CALL, fall_through
         if insn.rm == LR:
             return Role.RETURN, _if_conditional(insn, fall_through)
         if _follows_link_setup(insn, body):
@@ -157,6 +162,19 @@ def _classify(
     if insn.op is Op.LOAD_STORE and insn.load and insn.rd == PC:
         if insn.rn == SP and not insn.pre_indexed:
             return Role.RETURN, _if_conditional(insn, fall_through)  # ldr pc, [sp], #4
+        if (insn.rn == PC and not insn.byte and insn.pre_indexed and not insn.writeback
+                and insn.add_offset and insn.offset.rm is not None
+                and insn.offset.shift is ShiftType.LSL and insn.offset.shift_imm == 2):
+            resolved = _resolve_jump_table(insn, body, image)
+            if not 0 < resolved.case_count <= 4096:
+                raise ControlFlowError(f"{insn.address:#010x}: implausible pointer jump table size")
+            targets = tuple(image.u32(insn.pc_value + 4 * i) for i in range(resolved.case_count))
+            if any(target & 3 or not image.contains(target) for target in targets):
+                raise ControlFlowError(f"{insn.address:#010x}: pointer jump table leaves ARM image")
+            table = JumpTable(insn.address, resolved.index_register, resolved.case_count, 4, targets)
+            body.jump_tables[insn.address] = table
+            body.labels.update(targets)
+            return Role.JUMP_TABLE, list(targets) + _if_conditional(insn, fall_through)
         raise ControlFlowError(f"{insn.address:#010x}: unsupported load into pc: {insn.text}")
 
     if insn.op is Op.LOAD_STORE_MULTIPLE and insn.load and insn.register_list & (1 << PC):
@@ -233,7 +251,7 @@ def _resolve_jump_table(
     from a mask, which armcc uses to step into an unrolled loop; there is no compare, and the
     bound is whatever the mask and the arithmetic after it allow (`_mask_bound`).
     """
-    index_register = insn.operand2.rm
+    index_register = insn.offset.rm if insn.op is Op.LOAD_STORE else insn.operand2.rm
     if insn.cond_name in ("ls", "cc"):
         for back in range(1, JUMP_TABLE_COMPARE_WINDOW + 1):
             address = insn.address - 4 * back
@@ -329,12 +347,16 @@ def _mask_bound(insn: Instruction, index_register: int, body: FunctionBody, imag
 
 def _writes_register(insn: Instruction, register: int) -> bool:
     """Whether the instruction leaves a new value in `register`."""
-    if insn.op is Op.BRANCH:
+    if insn.op in (Op.BRANCH, Op.BX):
         return insn.link and register == LR
     if insn.op is Op.DATA:
         return insn.name not in ("cmp", "cmn", "tst", "teq") and insn.rd == register
-    if insn.op in (Op.MUL, Op.MULL, Op.MRS):
+    if insn.op in (Op.MUL, Op.MULL, Op.MRS, Op.CLZ, Op.SATURATE):
         return insn.rd == register or (insn.op is Op.MULL and insn.rn == register)
+    if insn.op is Op.LOAD_STORE_DOUBLE:
+        return (insn.load and register in (insn.rd, insn.rd + 1)) or (insn.writeback and insn.rn == register)
+    if insn.op is Op.HALF_MUL:
+        return register == insn.rd or (insn.name.startswith("smlal") and register == insn.rn)
     if insn.op in (Op.LOAD_STORE, Op.LOAD_STORE_HALF):
         return (insn.load and insn.rd == register) or (insn.writeback and insn.rn == register)
     if insn.op is Op.LOAD_STORE_MULTIPLE:

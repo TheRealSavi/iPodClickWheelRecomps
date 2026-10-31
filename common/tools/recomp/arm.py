@@ -2,8 +2,9 @@
 
 The decoder turns a 32-bit word into an `Instruction` whose fields mirror the ARM Architecture
 Reference Manual (ARMv4/v5 encodings, the ARM7TDMI/ARM926 the iPod runs). It deliberately covers
-only what appears in game code — data processing, multiplies, single/halfword/block transfers,
-branches, `bx`, `svc`, and the flag-field `mrs`/`msr` pair armcc's soft-float library uses — and
+only what appears in game code — data processing, multiplies (including ARMv5TE halfword
+forms), saturating arithmetic, CLZ, single/halfword/dual/block transfers, branches,
+`bx`/`blx` registers, `svc`, and the flag-field `mrs`/`msr` pair — and
 raises `UnsupportedInstruction` for anything else (coprocessor ops, `swp`, Thumb, and any
 status-register transfer that would change the processor mode). An unexpected encoding should
 stop the emitter loudly, not be guessed at.
@@ -110,8 +111,12 @@ class Op(Enum):
     MULL = "mull"  # umull, smull, umlal, smlal
     BRANCH = "b"  # b, bl
     BX = "bx"
+    CLZ = "clz"
+    SATURATE = "saturate"
+    HALF_MUL = "half_mul"
     LOAD_STORE = "ldr"  # ldr/str, byte and word
     LOAD_STORE_HALF = "ldrh"  # ldrh/strh/ldrsb/ldrsh
+    LOAD_STORE_DOUBLE = "ldrd"  # ARMv5TE ldrd/strd, even register pair
     LOAD_STORE_MULTIPLE = "ldm"  # ldm/stm in all addressing modes
     MRS = "mrs"  # mrs Rd, CPSR
     MSR = "msr"  # msr CPSR_<fields>, Rm / #imm
@@ -177,8 +182,40 @@ def decode(address: int, word: int) -> Instruction:
     if cond == 15:
         raise UnsupportedInstruction(address, word, "NV condition (ARMv5 unconditional space)")
 
-    if word & 0x0FFF_FFF0 == 0x012F_FF10:
+    if word & 0x0FFF_FFD0 == 0x012F_FF10:
         return _bx(address, word, cond)
+    if word & 0x0F90_0090 == 0x0100_0080:
+        rd, rn, rs, rm = (_field(word, h, l) for h, l in ((19, 16), (15, 12), (11, 8), (3, 0)))
+        kind = _field(word, 22, 21)
+        x, y = _bit(word, 5), _bit(word, 6)
+        if PC in (rd, rm, rs) or (kind in (0, 2) or (kind == 1 and not x)) and rn == PC:
+            raise UnsupportedInstruction(address, word, "half multiply with pc")
+        if kind == 2 and rn == rd:
+            raise UnsupportedInstruction(address, word, "half multiply long overlapping outputs")
+        if (kind == 3 or kind == 1 and x) and rn != 0:
+            raise UnsupportedInstruction(address, word, "half multiply reserved accumulate field")
+        if kind == 1:
+            name = ("smulw" if x else "smlaw") + ("t" if y else "b")
+        else:
+            name = ("smla", "", "smlal", "smul")[kind] + ("t" if x else "b") + ("t" if y else "b")
+        return Instruction(address, word, cond, Op.HALF_MUL,
+                           f"{name}{CONDITIONS[cond]} {REGISTER_NAMES[rd]}, {REGISTER_NAMES[rm]}, {REGISTER_NAMES[rs]}",
+                           name=name, rd=rd, rn=rn, rs=rs, rm=rm)
+    if word & 0x0F90_0FF0 == 0x0100_0050:
+        rd, rn, rm = _field(word, 15, 12), _field(word, 19, 16), _field(word, 3, 0)
+        if PC in (rd, rn, rm):
+            raise UnsupportedInstruction(address, word, "saturating arithmetic with pc")
+        name = ("qadd", "qsub", "qdadd", "qdsub")[_field(word, 22, 21)]
+        return Instruction(address, word, cond, Op.SATURATE,
+                           f"{name}{CONDITIONS[cond]} {REGISTER_NAMES[rd]}, {REGISTER_NAMES[rm]}, {REGISTER_NAMES[rn]}",
+                           name=name, rd=rd, rn=rn, rm=rm)
+    if word & 0x0FFF_0FF0 == 0x016F_0F10:
+        rd, rm = _field(word, 15, 12), _field(word, 3, 0)
+        if PC in (rd, rm):
+            raise UnsupportedInstruction(address, word, "clz with pc is unpredictable")
+        return Instruction(address, word, cond, Op.CLZ,
+                           f"clz{CONDITIONS[cond]} {REGISTER_NAMES[rd]}, {REGISTER_NAMES[rm]}",
+                           rd=rd, rm=rm)
     if word & 0x0FC0_00F0 == 0x0000_0090:
         return _multiply(address, word, cond)
     if word & 0x0F80_00F0 == 0x0080_0090:
@@ -221,7 +258,12 @@ def _ror32(value: int, amount: int) -> int:
 
 def _bx(address: int, word: int, cond: int) -> Instruction:
     rm = _field(word, 3, 0)
-    return Instruction(address, word, cond, Op.BX, f"bx{CONDITIONS[cond]} {REGISTER_NAMES[rm]}", rm=rm)
+    link = _bit(word, 5)
+    if link and rm == PC:
+        raise UnsupportedInstruction(address, word, "blx pc is unpredictable")
+    name = "blx" if link else "bx"
+    return Instruction(address, word, cond, Op.BX,
+                       f"{name}{CONDITIONS[cond]} {REGISTER_NAMES[rm]}", rm=rm, link=link)
 
 
 def _mrs(address: int, word: int, cond: int) -> Instruction:
@@ -382,8 +424,23 @@ def _load_store_half(address: int, word: int, cond: int) -> Instruction:
         offset = Offset(immediate=(_field(word, 11, 8) << 4) | _field(word, 3, 0))
     else:
         offset = Offset(rm=_field(word, 3, 0))
-    if not load and kind != 1:
-        raise UnsupportedInstruction(address, word, "ldrd/strd (ARMv5TE doubleword transfer)")
+    if not load and kind in (2, 3):
+        double_load = kind == 2
+        actual_writeback = writeback or not pre
+        if rd & 1 or rd >= 14 or (not pre and writeback):
+            raise UnsupportedInstruction(address, word, "unpredictable doubleword transfer")
+        if actual_writeback and (rn == PC or rn in (rd, rd + 1)):
+            raise UnsupportedInstruction(address, word, "doubleword writeback overlaps destination/base pc")
+        if not immediate and (offset.rm == PC or (double_load and offset.rm in (rd, rd + 1))):
+            raise UnsupportedInstruction(address, word, "unpredictable doubleword offset register")
+        name = ("ldrd" if double_load else "strd") + CONDITIONS[cond]
+        return Instruction(address, word, cond, Op.LOAD_STORE_DOUBLE,
+                           f"{name} {REGISTER_NAMES[rd]}, {REGISTER_NAMES[rd + 1]}, "
+                           f"{_addressing_text(rn, offset, pre, add, writeback)}",
+                           load=double_load, rd=rd, rn=rn, pre_indexed=pre,
+                           add_offset=add, writeback=actual_writeback, offset=offset)
+    if kind == 0:
+        raise UnsupportedInstruction(address, word, "undefined extra transfer encoding")
     signed, half = kind in (2, 3), kind in (1, 3)
     name = ("ldr" if load else "str") + ("s" if signed else "") + ("h" if half else "b") + CONDITIONS[cond]
     text = f"{name} {REGISTER_NAMES[rd]}, {_addressing_text(rn, offset, pre, add, writeback)}"

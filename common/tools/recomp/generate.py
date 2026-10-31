@@ -148,11 +148,11 @@ class Generator:
             stale.unlink()
         self._write_function_files(out_dir, Kind.GAME, "game")
         self._write_function_files(out_dir, Kind.RUNTIME, "runtime")
-        (out_dir / "funcs.h").write_text(self._funcs_header())
-        (out_dir / "calltable.cpp").write_text(self._calltable())
-        (out_dir / "bindings.h").write_text(self._bindings_header())
-        (out_dir / "bindings.cpp").write_text(self._bindings_source())
-        (out_dir / "emitted.json").write_text(self._emitted_report())
+        (out_dir / "funcs.h").write_text(self._funcs_header(), encoding="utf-8")
+        (out_dir / "calltable.cpp").write_text(self._calltable(), encoding="utf-8")
+        (out_dir / "bindings.h").write_text(self._bindings_header(), encoding="utf-8")
+        (out_dir / "bindings.cpp").write_text(self._bindings_source(), encoding="utf-8")
+        (out_dir / "emitted.json").write_text(self._emitted_report(), encoding="utf-8")
         return self.report
 
     def _emitted_report(self) -> str:
@@ -231,7 +231,9 @@ class Generator:
                 self.report.emitted += 1
                 self.report.instructions += len(body.instructions)
             parts.append(f"}}  // namespace {self.namespace}::game")
-            (out_dir / f"{stem}_{index // FUNCTIONS_PER_FILE:02d}.cpp").write_text("\n".join(parts) + "\n")
+            (out_dir / f"{stem}_{index // FUNCTIONS_PER_FILE:02d}.cpp").write_text(
+                "\n".join(parts) + "\n", encoding="utf-8"
+            )
 
     def _file_header(self, what: str) -> str:
         return (
