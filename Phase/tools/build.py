@@ -83,6 +83,7 @@ def main() -> None:
         f'"{PROJECT / "src/main.cpp"}"',
         f'"{PROJECT / "src/host.cpp"}"',
         f'"{PROJECT.parent / "common/src/ipod/platform/sdl3/presenter.cpp"}"',
+        f'"{PROJECT.parent / "common/src/ipod/platform/sdl3/nis.cpp"}"',
         f'"{PROJECT / "src/keyboard.cpp"}"',
         f'"{PROJECT / "src/library.cpp"}"',
         f'"{PROJECT / "src/audio.cpp"}"',
@@ -122,6 +123,10 @@ def main() -> None:
         raise SystemExit(result.returncode)
     shutil.copy2(sdl / "lib/x64/SDL3.dll", build / "SDL3.dll")
     shutil.copy2(sdl / "LICENSE.txt", build / "SDL3-LICENSE.txt")
+    shutil.copy2(
+        PROJECT.parent / "common/licenses/NVIDIA-NIS-LICENSE.txt",
+        build / "NVIDIA-NIS-LICENSE.txt",
+    )
     print(build / "phase-startup.exe")
 
 

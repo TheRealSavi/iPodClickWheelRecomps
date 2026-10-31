@@ -49,10 +49,15 @@ Escape or the window's Close button exits. Without `--visible`, rendering uses
 a hidden window, useful for verification. Screenshots are uncompressed PPM files.
 Drag the window edges or maximize it to enlarge the game. The shared presenter
 preserves the native 320×240 frame's aspect ratio and fills unused space with
-black bars. **F6** cycles Sharp (default), Nearest, and Smooth; **F7** toggles
+black bars. **F6** cycles Sharp (default), Nearest, Smooth, and NVIDIA NIS;
+**F7** toggles
 integer scaling. The title shows the current choices, which save with your local
 profiles between launches. Screenshots include the complete resized client area.
 See [shared video presentation](../common/video.md).
+NVIDIA NIS uses the GPU for edge-aware enlargement and sharpening on Windows
+with Direct3D 11, including the RTX 4070. It is spatial upscaling, not DLSS or AI
+frame generation. Enlarge the window to see its effect; native-size pixels remain
+unchanged. No additional NVIDIA SDK/runtime installation is needed.
 The graphical default is 300 frames; `--frames` accepts 1–36,000. This bounded
 preview uses real elapsed time and a 60 Hz callback limit with `--audio`.
 Without that flag it retains silent, deterministic diagnostic behavior.

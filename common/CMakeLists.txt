@@ -8,6 +8,7 @@
 # directory, and the headless oracle target has no SDL at all. It is published as a list instead,
 # and each title compiles it into its own SDL executable alongside its own `platform/sdl3/`.
 set(IPOD_CORE_SDL3_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ipod/platform/sdl3/nis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ipod/platform/sdl3/presenter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ipod/platform/sdl3/music_decoder.cpp
     PARENT_SCOPE)

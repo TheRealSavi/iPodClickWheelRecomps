@@ -3,9 +3,10 @@
 | What | Where | Licence |
 |---|---|---|
 | The tools | `common/tools/` | MIT (`common/tools/LICENSE`) |
+| NVIDIA Image Scaling SDK and derived shader bytecode | `common/third_party/nis/`, `common/src/ipod/platform/sdl3/nis_shader.inc` | MIT (NVIDIA; `common/third_party/nis/LICENSE.txt`) |
 | Everything else | the titles (including experimental Phase), `common/src/`, `common/cmake/` | GPL-3.0-or-later (`LICENSE`) |
 
-Copyright (C) 2026 Brandon Smith. This page and `common/tools/LICENSE` are the only places in the tree that name an author.
+Copyright (C) 2026 Brandon Smith. Vendored NVIDIA files retain their own notices.
 
 ## Why the split
 
@@ -21,7 +22,10 @@ A licence governs the part that is ours to license. It cannot and does not grant
 
 ## Third-party code
 
-Nothing third-party is vendored in this tree. What a build links, and what a release therefore carries, is listed in `common/licenses/README.md`; the notice each one asks to travel with is beside it, and `common/tools/release.sh` copies them into every artifact that needs them.
+NVIDIA Image Scaling 1.0.3 is vendored under MIT; its provenance and regeneration
+instructions are in `common/third_party/nis/README.md`. Windows releases carry its
+notice alongside the executable. Other linked dependencies and their notices
+are listed in `common/licenses/README.md`; `common/tools/release.sh` packages them.
 
 ## Applying the notice to a source file
 

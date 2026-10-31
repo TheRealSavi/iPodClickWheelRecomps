@@ -1,14 +1,16 @@
 #pragma once
 
 namespace ipod::video {
-enum class Scaling { Sharp, Nearest, Smooth };
-constexpr unsigned SCALING_COUNT = 3;
+enum class Scaling { Sharp, Nearest, Smooth, NvidiaNis };
+constexpr unsigned SCALING_COUNT = 4;
 constexpr const char* scaling_label(Scaling scaling) {
     switch (scaling) {
     case Scaling::Nearest:
         return "Nearest";
     case Scaling::Smooth:
         return "Smooth";
+    case Scaling::NvidiaNis:
+        return "NVIDIA NIS";
     default:
         return "Sharp";
     }

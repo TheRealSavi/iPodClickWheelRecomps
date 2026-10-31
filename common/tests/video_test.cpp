@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <vector>
 
 namespace {
@@ -15,20 +16,21 @@ void check(bool value, const char* message) {
     }
 }
 }  // namespace
-int main() {
+int main(int argc, char** argv) {
     check(ipod::video::fit(320, 240, 0, 0).width == 0, "minimized output");
     check(ipod::video::fit(0, 240, 960, 540).width == 0, "invalid source");
     check(SDL_Init(SDL_INIT_VIDEO), "video init");
     SDL_Window* window =
         SDL_CreateWindow("Presentation test", 960, 540, SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE);
     check(window != nullptr, "window");
-    SDL_Renderer* renderer = SDL_CreateRenderer(window, "software");
+    const char* backend = argc > 1 ? argv[1] : "software";
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, backend);
     check(renderer != nullptr, "renderer");
     ipod::video::Presenter presenter;
     presenter.attach(renderer, 320, 240);
     std::vector<unsigned char> white(320 * 240 * 3, 255);
     for (auto mode : {ipod::video::Scaling::Sharp, ipod::video::Scaling::Nearest,
-                      ipod::video::Scaling::Smooth}) {
+                      ipod::video::Scaling::Smooth, ipod::video::Scaling::NvidiaNis}) {
         presenter.set_options({mode, false});
         for (const auto& size : std::array<std::array<int, 2>, 5>{
                  {{960, 540}, {500, 900}, {319, 241}, {160, 120}, {320, 240}}}) {
@@ -134,8 +136,47 @@ int main() {
     event.type = SDL_EVENT_KEY_DOWN;
     event.key.scancode = SDL_SCANCODE_F6;
     check(presenter.handle_shortcut(event) &&
-              presenter.options().scaling == ipod::video::Scaling::Sharp,
+              presenter.options().scaling == ipod::video::Scaling::NvidiaNis,
           "cycle scaling");
+    check(presenter.present(white.data(), 320, 240), "NIS or explicit Sharp fallback");
+    const bool gpu = std::string(backend) == "direct3d11";
+    check(presenter.nis_active() == gpu, "NIS actually dispatched on D3D11");
+    if (gpu) {
+        std::vector<unsigned char> diagonal(320 * 240 * 3);
+        for (int y = 0; y < 240; ++y)
+            for (int x = 0; x < 320; ++x)
+                for (int c = 0; c < 3; ++c)
+                    diagonal[(y * 320 + x) * 3 + c] = x > y ? 210 : 40;
+        const auto captured = [&]() {
+            check(presenter.present(diagonal.data(), 320, 240), "diagonal presentation");
+            auto* image = presenter.capture();
+            check(image != nullptr, "diagonal capture");
+            auto* rgb = SDL_ConvertSurface(image, SDL_PIXELFORMAT_RGB24);
+            check(rgb != nullptr, "diagonal conversion");
+            std::vector<unsigned char> result;
+            for (int y = 0; y < rgb->h; ++y) {
+                auto* row = static_cast<unsigned char*>(rgb->pixels) + y * rgb->pitch;
+                result.insert(result.end(), row, row + rgb->w * 3);
+            }
+            SDL_DestroySurface(rgb);
+            SDL_DestroySurface(image);
+            return result;
+        };
+        // A non-round 4.5x enlargement requires three bounded NIS dispatches.
+        check(SDL_SetWindowSize(window, 1440, 1080) && SDL_SyncWindow(window), "large NIS resize");
+        auto enhanced = captured();
+        check(presenter.nis_active(), "cascaded NIS active");
+        check(enhanced == captured(), "NIS deterministic across repeated frames");
+        presenter.set_options({ipod::video::Scaling::Smooth, false});
+        check(enhanced != captured(), "NIS differs from ordinary bilinear scaling");
+        presenter.set_options({ipod::video::Scaling::NvidiaNis, false});
+        check(SDL_SetWindowSize(window, 320, 240) && SDL_SyncWindow(window), "NIS native resize");
+        check(captured() == diagonal && !presenter.nis_active(),
+              "native pixels bypass enhancement");
+    }
+    check(presenter.handle_shortcut(event) &&
+              presenter.options().scaling == ipod::video::Scaling::Sharp,
+          "cycle back to Sharp");
     event.key.repeat = true;
     check(!presenter.handle_shortcut(event), "ignore repeats");
     event.key.repeat = false;

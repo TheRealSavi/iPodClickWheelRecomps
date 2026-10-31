@@ -413,10 +413,13 @@ int test_host(const std::filesystem::path& assets) {
     require(std::strstr(SDL_GetWindowTitle(window), "Sharp | Fit"), "fresh video defaults");
     send_key(SDL_SCANCODE_F6, true);
     send_key(SDL_SCANCODE_F7, true);
-    require(std::strstr(SDL_GetWindowTitle(window), "Nearest | Integer"), "video options changed");
+    send_key(SDL_SCANCODE_F6, true);
+    send_key(SDL_SCANCODE_F6, true);
+    require(std::strstr(SDL_GetWindowTitle(window), "NVIDIA NIS | Integer"),
+            "video options changed");
     phase::host::close();
     reopen();
-    require(std::strstr(SDL_GetWindowTitle(window), "Nearest | Integer"),
+    require(std::strstr(SDL_GetWindowTitle(window), "NVIDIA NIS | Integer"),
             "video options survived restart");
     phase::host::close();
     std::puts(

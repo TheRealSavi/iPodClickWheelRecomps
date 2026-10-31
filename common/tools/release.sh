@@ -167,6 +167,7 @@ package_windows() {  # dir exe display folder datadir linuxdir
     rm -rf "$stage"; mkdir -p "$stage"
     cp "$built/$exe.exe" "$built/SDL3.dll" "$stage/"
     cp "$here/common/licenses/SDL3-LICENSE.txt" "$stage/"
+    cp "$here/common/licenses/NVIDIA-NIS-LICENSE.txt" "$stage/"
     cp "$here/LICENSE" "$stage/COPYING.txt"
     "$tools/artifact-readme.sh" "$display" "$version" windows "$folder" "$datadir" "$exe" "$linuxdir" \
         > "$stage/README.txt"

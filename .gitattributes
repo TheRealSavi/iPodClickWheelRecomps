@@ -1,0 +1,4 @@
+# Keep the pinned NVIDIA originals byte-for-byte, including upstream whitespace.
+common/third_party/nis/NIS_* -whitespace -text
+common/third_party/nis/LICENSE.txt -whitespace -text
+common/licenses/NVIDIA-NIS-LICENSE.txt -whitespace -text

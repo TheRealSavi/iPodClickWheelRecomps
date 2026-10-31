@@ -13,8 +13,12 @@ What a released artifact has to carry beside the binary, because the binary cont
   from the NDK's own `NOTICE.toolchain`, which states it for the whole toolchain; what is here
   is the part that covers what actually ships.
 
-Nothing else is vendored. These are the libraries a build links, none of whose source is in this
-tree:
+NVIDIA Image Scaling 1.0.3 is vendored in `common/third_party/nis` under MIT.
+Windows desktop builds embed its compute shader and ship
+`NVIDIA-NIS-LICENSE.txt`. Phase's build and the shared Windows release script
+copy that notice alongside the executable.
+
+These other libraries are linked without vendoring their source:
 
 | Library | Where it is linked | Licence | Travels with a release? |
 |---|---|---|---|

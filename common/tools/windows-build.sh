@@ -57,6 +57,7 @@ docker run --rm -v "$root":/work -w "/work/$(basename "$title")" "$image" sh -c 
     cmake --build build-windows -j\"\$(nproc)\"
     mkdir -p build-windows/dist
     cp build-windows/$exe.exe /opt/sdl3/bin/SDL3.dll build-windows/dist/
+    cp ../common/licenses/NVIDIA-NIS-LICENSE.txt build-windows/dist/
 "
 
 ls -l "$title/build-windows/dist"

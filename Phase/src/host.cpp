@@ -87,9 +87,9 @@ uint32_t expose_profile(const persistence::Profile& profile) {
 }
 void video_title() {
     const auto options = presenter.options();
-    const std::string title =
-        std::string("Phase - ") + ipod::video::scaling_label(options.scaling) +
-        (options.pixel_perfect ? " | Integer" : " | Fit") + " | F6: filter, F7: integer scaling";
+    const std::string title = std::string("Phase - ") + presenter.scaling_description() +
+                              (options.pixel_perfect ? " | Integer" : " | Fit") +
+                              " | F6: filter, F7: integer scaling";
     SDL_SetWindowTitle(display_window, title.c_str());
 }
 unsigned physical_scan(SDL_Scancode scan) {
@@ -386,8 +386,11 @@ bool graphics(Cpu& cpu, unsigned ordinal) {
             rgb[i * 3 + 1] = uint8_t(((p >> 5) & 63) * 255 / 63 * scale / 100);
             rgb[i * 3 + 2] = uint8_t((p & 31) * 255 / 31 * scale / 100);
         }
+        const auto* previous_scaling = presenter.scaling_description();
         if (!presenter.present(rgb.data(), 320, 240))
             fatal("Video presentation failed: %s", SDL_GetError());
+        if (std::strcmp(previous_scaling, presenter.scaling_description()) != 0)
+            video_title();
         if (!wglMakeCurrent(dc, rendering))
             fatal("OpenGL compatibility context restore failed");
         cpu.r[0] = 1;

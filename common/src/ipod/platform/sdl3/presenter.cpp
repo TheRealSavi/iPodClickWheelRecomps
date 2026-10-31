@@ -13,6 +13,8 @@ void Presenter::attach(SDL_Renderer* renderer, int width, int height) {
     logical_height_ = height;
 }
 void Presenter::reset() {
+    nis_.reset();
+    nis_active_ = false;
     if (frame_)
         SDL_DestroyTexture(frame_);
     if (prescale_)
@@ -25,6 +27,12 @@ void Presenter::reset() {
     frame_ = prescale_ = nullptr;
     renderer_ = nullptr;
     width_ = height_ = 0;
+    upload_.clear();
+}
+const char* Presenter::scaling_description() const {
+    if (options_.scaling == Scaling::NvidiaNis && !nis_.available(renderer_))
+        return "NVIDIA NIS (Sharp fallback)";
+    return scaling_label(options_.scaling);
 }
 bool Presenter::handle_shortcut(const SDL_Event& event) {
     if (event.type != SDL_EVENT_KEY_DOWN || event.key.repeat ||
@@ -63,15 +71,22 @@ bool Presenter::present(const uint8_t* rgb, unsigned width, unsigned height) {
     if (!frame_ || width_ != static_cast<int>(width) || height_ != static_cast<int>(height)) {
         if (frame_)
             SDL_DestroyTexture(frame_);
-        frame_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING,
+        frame_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
                                    static_cast<int>(width), static_cast<int>(height));
         width_ = static_cast<int>(width);
         height_ = static_cast<int>(height);
     }
-    return frame_ && SDL_UpdateTexture(frame_, nullptr, rgb, width_ * 3) && render_last() &&
+    // Explicit native RGBA storage lets both SDL and the compute shader read
+    // the same upload. SDL hides native resources behind its RGB24 conversion.
+    upload_.resize(size_t(width_) * size_t(height_) * 4);
+    return frame_ &&
+           SDL_ConvertPixels(width_, height_, SDL_PIXELFORMAT_RGB24, rgb, width_ * 3,
+                             SDL_PIXELFORMAT_RGBA32, upload_.data(), width_ * 4) &&
+           SDL_UpdateTexture(frame_, nullptr, upload_.data(), width_ * 4) && render_last() &&
            SDL_RenderPresent(renderer_);
 }
 bool Presenter::render_last() {
+    nis_active_ = false;
     if (!renderer_ || !frame_ || logical_width_ <= 0 || logical_height_ <= 0)
         return SDL_SetError("No video frame available");
     if (!SDL_SetRenderTarget(renderer_, nullptr) ||
@@ -103,7 +118,15 @@ bool Presenter::render_last() {
                                                  ? SDL_SCALEMODE_LINEAR
                                                  : SDL_SCALEMODE_NEAREST))
             return false;
-        if (options_.scaling == Scaling::Sharp) {
+        if (options_.scaling == Scaling::NvidiaNis &&
+            (output_width > width_ || output_height > height_)) {
+            if (auto* enhanced = nis_.upscale(renderer_, frame_, output_width, output_height)) {
+                source = enhanced;
+                nis_active_ = true;
+            }
+        }
+        if (options_.scaling == Scaling::Sharp ||
+            (options_.scaling == Scaling::NvidiaNis && !nis_active_)) {
             const int factor = std::clamp(std::max((output_width + width_ - 1) / width_,
                                                    (output_height + height_ - 1) / height_),
                                           1, 8);

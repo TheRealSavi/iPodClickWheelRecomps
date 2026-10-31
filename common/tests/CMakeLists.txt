@@ -4,15 +4,24 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 enable_testing()
 find_package(SDL3 3.2 CONFIG REQUIRED)
-add_executable(video_test video_test.cpp ../src/ipod/platform/sdl3/presenter.cpp)
+add_executable(video_test video_test.cpp ../src/ipod/platform/sdl3/presenter.cpp
+    ../src/ipod/platform/sdl3/nis.cpp)
 target_include_directories(video_test PRIVATE ../src)
 target_link_libraries(video_test PRIVATE SDL3::SDL3)
+if(MSVC)
+    target_compile_options(video_test PRIVATE /EHs-c- /GR-)
+else()
+    target_compile_options(video_test PRIVATE -fno-exceptions -fno-rtti)
+endif()
 if(WIN32)
     add_custom_command(TARGET video_test POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:SDL3::SDL3> $<TARGET_FILE_DIR:video_test>)
 endif()
 add_test(NAME video_presentation COMMAND video_test)
+if(WIN32)
+    add_test(NAME video_nis_d3d11 COMMAND video_test direct3d11)
+endif()
 
 # Compile every desktop integration without requiring proprietary game files or
 # linking a complete game. This catches drift among the six platform adapters.
