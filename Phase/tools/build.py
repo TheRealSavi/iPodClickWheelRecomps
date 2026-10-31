@@ -63,6 +63,7 @@ def main() -> None:
         *[f'"{p}"' for p in sources],
         f'"{PROJECT / "src/main.cpp"}"',
         f'"{PROJECT / "src/host.cpp"}"',
+        f'"{PROJECT / "src/keyboard.cpp"}"',
         f'"{PROJECT / "tests/host_contract.cpp"}"',
         "opengl32.lib",
         "gdi32.lib",

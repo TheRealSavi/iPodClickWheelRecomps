@@ -16,14 +16,22 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=15)
     parser.add_argument("--assets", type=Path)
     parser.add_argument("--visible", action="store_true")
+    parser.add_argument(
+        "--quiet-sdk",
+        action="store_true",
+        help="omit per-service tracing during longer previews",
+    )
     parser.add_argument("--frames", type=int, default=300)
     parser.add_argument("--screenshot", type=Path)
+    parser.add_argument(
+        "--input-script", type=Path, help="frame, hex scan code, down (1/0) per row"
+    )
     args = parser.parse_args()
     checked_image(args.image)
-    if not 0 < args.timeout <= 60:
-        parser.error("timeout must be between zero and 60 seconds")
-    if not 1 <= args.frames <= 10000:
-        parser.error("frames must be between 1 and 10000")
+    if not 0 < args.timeout <= 600:
+        parser.error("timeout must be between zero and 600 seconds")
+    if not 1 <= args.frames <= 36000:
+        parser.error("frames must be between 1 and 36000")
     if not args.assets and (args.visible or args.screenshot):
         parser.error("--visible and --screenshot require --assets")
     command = [str(PROJECT / "build/phase-startup.exe"), str(args.image.resolve())]
@@ -36,8 +44,12 @@ def main() -> int:
         ]
     if args.visible:
         command += ["--visible"]
+    if args.quiet_sdk:
+        command += ["--quiet-sdk"]
     if args.screenshot:
         command += ["--screenshot", str(args.screenshot.resolve())]
+    if args.input_script:
+        command += ["--input-script", str(args.input_script.resolve())]
     try:
         result = subprocess.run(
             command, capture_output=True, text=True, timeout=args.timeout, check=False

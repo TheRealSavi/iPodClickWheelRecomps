@@ -12,6 +12,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -64,9 +65,11 @@ namespace phase::eapp {
 uint32_t next_arena = ipod::HEAP_BASE + 0x10000;
 uint32_t clock_microseconds = 0;
 bool graphical = false;
+bool trace_sdk = true;
 void framework_call(Cpu& cpu, const char* framework, unsigned ordinal, void (*handler)(Cpu&)) {
-    std::fprintf(stderr, "SDK %s[%u] lr=%08x r0=%08x r1=%08x r2=%08x r3=%08x\n", framework, ordinal,
-                 cpu.r[ipod::LR], cpu.r[0], cpu.r[1], cpu.r[2], cpu.r[3]);
+    if (trace_sdk)
+        std::fprintf(stderr, "SDK %s[%u] lr=%08x r0=%08x r1=%08x r2=%08x r3=%08x\n", framework,
+                     ordinal, cpu.r[ipod::LR], cpu.r[0], cpu.r[1], cpu.r[2], cpu.r[3]);
     if (handler) {
         handler(cpu);
         return;
@@ -155,10 +158,15 @@ int main(int argc, char** argv) {
         unsigned frames = 3;
         bool visible = false;
         std::filesystem::path assets;
+        std::filesystem::path input_script;
         for (int i = 2; i < argc; ++i) {
             std::string option = argv[i];
             if (option == "--visible") {
                 visible = true;
+                continue;
+            }
+            if (option == "--quiet-sdk") {
+                phase::eapp::trace_sdk = false;
                 continue;
             }
             if (i + 1 >= argc)
@@ -169,15 +177,43 @@ int main(int argc, char** argv) {
                 assets = argv[++i];
             else if (option == "--screenshot")
                 screenshot_path = argv[++i];
+            else if (option == "--input-script")
+                input_script = argv[++i];
             else if (option == "--frames") {
                 frames = std::stoul(argv[++i]);
-                if (!frames || frames > 10000)
+                if (!frames || frames > 36000)
                     throw std::runtime_error("invalid frame limit");
             } else
                 throw std::runtime_error("unknown option");
         }
         if (assets.empty() && (visible || !screenshot_path.empty()))
             throw std::runtime_error("--visible and --screenshot require --assets");
+        struct InputStep {
+            unsigned frame, scan;
+            bool down;
+        };
+        std::vector<InputStep> input_steps;
+        if (!input_script.empty()) {
+            if (assets.empty())
+                throw std::runtime_error("input script requires --assets");
+            std::ifstream script(input_script);
+            if (!script)
+                throw std::runtime_error("cannot open input script");
+            std::string line;
+            while (std::getline(script, line)) {
+                if (line.empty() || line[0] == '#')
+                    continue;
+                std::istringstream row(line);
+                unsigned frame, scan, down;
+                std::string extra;
+                if (!(row >> frame >> std::hex >> scan >> std::dec >> down) || (row >> extra) ||
+                    scan >= 128 || down > 1 || frame >= frames ||
+                    (!input_steps.empty() && frame < input_steps.back().frame))
+                    throw std::runtime_error("invalid input script row (frame hex-scan 0-or-1)");
+                input_steps.push_back({frame, scan, down != 0});
+            }
+        }
+        size_t next_input = 0;
         if (!assets.empty()) {
             phase::host::initialize(assets, visible);
             phase::eapp::graphical = true;
@@ -205,6 +241,10 @@ int main(int argc, char** argv) {
             if (phase::eapp::graphical) {
                 if (!phase::host::pump())
                     break;
+                while (next_input < input_steps.size() && input_steps[next_input].frame == frame) {
+                    const auto& step = input_steps[next_input++];
+                    phase::host::key(step.scan, step.down);
+                }
                 phase::host::begin_frame(context);
             }
             cpu.r[0] = context;

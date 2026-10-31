@@ -4,6 +4,7 @@
 #define NOMINMAX
 #include "host.h"
 
+#include "keyboard.h"
 #include "runtime/memory.h"
 #include "runtime/runtime.h"
 
@@ -26,6 +27,8 @@ HWND window = nullptr;
 HDC dc = nullptr;
 HGLRC rendering = nullptr;
 bool quitting = false;
+input::Keyboard keyboard;
+constexpr uint32_t input_nodes = 0x11001000;
 std::filesystem::path asset_root;
 std::vector<uint32_t> completions;
 struct File {
@@ -37,6 +40,11 @@ uint32_t next_file = 1, next_buffer = 1;
 uint32_t audio_queue_size = 0;
 bool audio_playing = false;
 std::vector<std::map<unsigned, uint32_t>> voices;
+std::vector<std::string> profiles;
+constexpr uint32_t profile_base = 0x11004000;
+// Session-local save records, separate from the read-only asset tree.
+std::map<std::string, std::vector<uint8_t>> saves;
+std::map<uint32_t, std::string> save_slots;
 constexpr uint32_t framebuffer = 0x11010000;
 uint32_t arg(const Cpu& cpu, unsigned index) {
     return index < 4 ? cpu.r[index] : ld32(cpu.r[SP] + 4 * (index - 4));
@@ -68,6 +76,16 @@ LRESULT CALLBACK window_proc(HWND handle, UINT message, WPARAM w, LPARAM l) {
         quitting = true;
         return 0;
     }
+    if (message == WM_KEYDOWN || message == WM_KEYUP) {
+        auto scan = unsigned((l >> 16) & 255);
+        // Accessibility/SendInput virtual-key events can omit the scan code.
+        if (!scan)
+            scan = MapVirtualKeyW(UINT(w), MAPVK_VK_TO_VSC);
+        key(scan, message == WM_KEYDOWN);
+        return 0;
+    }
+    if (message == WM_KILLFOCUS)
+        keyboard.release_all();
     return DefWindowProcW(handle, message, w, l);
 }
 std::filesystem::path asset_path(std::string name) {
@@ -104,25 +122,75 @@ void queue(uint32_t request) {
     completions.push_back(request);
 }
 bool file_service(Cpu& cpu, unsigned ordinal) {
+    if (ordinal == 12) {
+        if (cpu.r[0] != 1)
+            fatal("unsupported save resource kind");
+        const auto name = string_at(cpu.r[1]);
+        if (name.empty() || name.find_first_of("/\\:") != std::string::npos || name == "..")
+            fatal("invalid save name");
+        uint32_t slot = 0;
+        while (save_slots.count(slot))
+            ++slot;
+        if (slot >= 4) {
+            cpu.r[0] = 0x19;
+            return true;
+        }
+        save_slots[slot] = name;
+        st32(cpu.r[2], slot);
+        cpu.r[0] = 0;
+        return true;
+    }
+    if (ordinal == 14 || ordinal == 16) {
+        const auto found = save_slots.find(cpu.r[0]);
+        if (found == save_slots.end()) {
+            cpu.r[0] = 8;
+            return true;
+        }
+        if (ordinal == 16) {
+            if (cpu.r[2] > 0x19000) {
+                cpu.r[0] = 0x19;
+                return true;
+            }
+            const auto* bytes = guest_pointer(cpu.r[1], cpu.r[2]);
+            saves[found->second] = std::vector<uint8_t>(bytes, bytes + cpu.r[2]);
+        } else
+            save_slots.erase(found);
+        cpu.r[0] = 0;
+        return true;
+    }
     if (ordinal == 0) {
-        if (cpu.r[0] != 0 || cpu.r[2] != 1)
+        const bool saved = cpu.r[0] == 1 && cpu.r[2] == 0;
+        if (!saved && (cpu.r[0] != 0 || cpu.r[2] != 1))
             fatal("only read-only game assets are supported");
         const uint32_t request = cpu.r[3], object = ld32(request + 0x14);
         const auto name = string_at(cpu.r[1]);
-        const auto path = asset_path(name);
-        if (std::filesystem::exists(path) && (!std::filesystem::is_regular_file(path) ||
-                                              std::filesystem::file_size(path) > 64 * 1024 * 1024))
-            fatal("invalid or oversized asset");
-        std::ifstream input(path, std::ios::binary);
-        if (!input) {
+        File file;
+        bool exists = false;
+        if (saved) {
+            const auto found = saves.find(name);
+            if (found != saves.end()) {
+                file.bytes = found->second;
+                exists = true;
+            }
+        } else {
+            const auto path = asset_path(name);
+            if (std::filesystem::exists(path) &&
+                (!std::filesystem::is_regular_file(path) ||
+                 std::filesystem::file_size(path) > 64 * 1024 * 1024))
+                fatal("invalid or oversized asset");
+            std::ifstream input(path, std::ios::binary);
+            if (input) {
+                file.bytes.assign(std::istreambuf_iterator<char>(input), {});
+                exists = true;
+            }
+        }
+        if (!exists) {
             std::fprintf(stderr, "FILE missing %s\n", name.c_str());
             st32(request + 0x28, 0xffffffff);
             queue(request);
             cpu.r[0] = 1;
             return true;
         }
-        File file;
-        file.bytes.assign(std::istreambuf_iterator<char>(input), {});
         const uint32_t handle = next_file++, size = uint32_t(file.bytes.size());
         files.emplace(handle, std::move(file));
         st32(request + 0x34, handle);
@@ -329,6 +397,22 @@ void initialize(const std::filesystem::path& assets, bool visible) {
         ShowWindow(window, SW_SHOW);
 }
 bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
+    if (std::strcmp(framework, "Metadata") == 0 && ordinal == 45) {
+        cpu.r[0] = 0;
+        return true;
+    }  // one empty library browser
+    if (std::strcmp(framework, "Metadata") == 0 && ordinal == 47) {
+        cpu.r[0] = 0;
+        return true;
+    }  // reset browser
+    if (std::strcmp(framework, "Metadata") == 0 && ordinal == 57) {
+        cpu.r[0] = 0;
+        return true;
+    }  // filter empty browser
+    if (std::strcmp(framework, "Metadata") == 0 && ordinal == 61) {
+        cpu.r[0] = 0;
+        return true;
+    }  // no host playlists connected
     // Native 180051f8 clamps this battery-gauge reading to 22 (full).
     if (std::strcmp(framework, "miscTBD") == 0 && ordinal == 6) {
         cpu.r[0] = 22;
@@ -344,9 +428,13 @@ bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
         return file_service(cpu, ordinal);
     if (std::strcmp(framework, "InputEvents") == 0 && ordinal == 0) {
         st32(cpu.r[0], 0);
-        st32(cpu.r[1], 0);
+        st32(cpu.r[1], keyboard.wheel());
         cpu.r[0] = 0;
         return true;
+    }
+    if (std::strcmp(framework, "InputEvents") == 0 && ordinal == 1) {
+        cpu.r[0] = 0;
+        return true;  // nodes are owned by this frame's host arena
     }
     if (std::strcmp(framework, "Settings") == 0 && ordinal == 0) {
         const auto name = string_at(cpu.r[0]);
@@ -357,11 +445,45 @@ bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
         cpu.r[0] = 0;
         return true;
     }
-    if (std::strcmp(framework, "Users") == 0 && ordinal == 0) {
-        cpu.r[0] = 0;
-        return true;
-    }  // empty host profile list
+    if (std::strcmp(framework, "Users") == 0) {
+        if (ordinal == 0) {
+            cpu.r[0] = uint32_t(profiles.size());
+            return true;
+        }
+        if (ordinal == 4) {
+            const auto name = string_at(cpu.r[0]);
+            if (name.empty() || name.size() > 31 || profiles.size() >= 5)
+                fatal("invalid preview profile");
+            auto handle = profile_base + uint32_t(profiles.size()) * 64;
+            profiles.push_back(name);
+            std::memcpy(guest_pointer(handle, 32), name.c_str(), name.size() + 1);
+            cpu.r[0] = handle;
+            return true;
+        }
+        if (ordinal == 1 || ordinal == 2) {
+            unsigned index = ordinal == 1 ? cpu.r[0] : cpu.r[0] - 1;
+            cpu.r[0] = index < profiles.size() ? profile_base + index * 64 : 0;
+            return true;
+        }
+        const auto handle = cpu.r[0];
+        if (handle < profile_base || (handle - profile_base) % 64 ||
+            (handle - profile_base) / 64 >= profiles.size())
+            fatal("invalid profile handle");
+        if (ordinal == 5) {
+            cpu.r[0] = handle;
+            return true;
+        }
+        if (ordinal == 8) {
+            cpu.r[0] = (handle - profile_base) / 64 + 1;
+            return true;
+        }
+    }
     if (std::strcmp(framework, "SoundEffect") == 0) {
+        // 1800d0c0 forwards this global default to the per-voice rate setter.
+        if (ordinal == 33) {
+            cpu.r[0] = 0x10000;
+            return true;
+        }
         if (ordinal == 0) {
             cpu.r[0] = uint32_t(voices.size());
             voices.emplace_back();
@@ -369,6 +491,10 @@ bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
         }
         if (cpu.r[0] >= voices.size())
             fatal("invalid preview voice");
+        if (ordinal == 35) {
+            cpu.r[0] = 0;
+            return true;
+        }  // silent voices finish immediately
         if (ordinal >= 7 && ordinal <= 18) {
             voices[cpu.r[0]][ordinal] = cpu.r[1];
             cpu.r[0] = 0;
@@ -395,6 +521,10 @@ bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
     }
     // Silent preview queue; this does not decode or play audio.
     if (std::strcmp(framework, "Audio") == 0) {
+        if (ordinal == 40) {
+            cpu.r[0] = 0;
+            return true;
+        }  // silent preview: repeat off
         if (ordinal == 19 || ordinal == 16) {
             audio_queue_size = 0;
             audio_playing = false;
@@ -433,6 +563,7 @@ bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
     return false;
 }
 void begin_frame(uint32_t context) {
+    keyboard.advance();
     st32(context + 0x38, framebuffer);
     uint32_t head = 0;
     for (auto it = completions.rbegin(); it != completions.rend(); ++it) {
@@ -441,6 +572,21 @@ void begin_frame(uint32_t context) {
     }
     completions.clear();
     st32(context + 0x2c, head);
+    const auto events = keyboard.take_buttons();
+    if (events.size() > 256)
+        fatal("input event budget exhausted");
+    for (size_t i = 0; i < events.size(); ++i) {
+        const auto node = input_nodes + uint32_t(i) * 12;
+        st32(node, 0);
+        st8(node, events[i].button);
+        st8(node + 1, events[i].down ? 2 : 1);
+        st32(node + 4, 0);
+        st32(node + 8, i + 1 < events.size() ? node + 12 : 0);
+    }
+    st32(context + 0x30, events.empty() ? 0 : input_nodes);
+}
+void key(unsigned scan, bool down) {
+    keyboard.key(scan, down);
 }
 bool pump() {
     MSG message;
@@ -481,9 +627,13 @@ void close() {
     files.clear();
     completions.clear();
     voices.clear();
+    profiles.clear();
+    saves.clear();
+    save_slots.clear();
     next_file = next_buffer = 1;
     audio_queue_size = 0;
     audio_playing = false;
     quitting = false;
+    keyboard = {};
 }
 }  // namespace phase::host

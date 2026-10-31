@@ -129,14 +129,14 @@ callbacks. The host never calls a callback early or parses the archive itself.
 Only resource kind zero and read-only open flag one are supported. Paths must
 remain under the canonical asset root; parent traversal, absolute paths, and
 alternate stream syntax are refused. Files are bounded to 64 MiB and loaded
-into host memory for this preview. Writes and save-store services remain
-unsupported. Tests cover successful and missing opens, reads, EOF, end-relative
+into host memory for this preview. Asset writes remain unsupported; session
+save services are described below. Tests cover opens, reads, EOF, end-relative
 seeks, queued ordering, rejection of writes, and path containment.
 
 ### Explicit preview conventions
 
-Settings supplies English, Users supplies an empty profile list, and InputEvents
-supplies no buttons or wheel contact. This naturally leads to name entry. The
+Settings supplies English and Users starts with an empty profile list. This
+leads to name entry; the keyboard bridge below now supplies input. The
 battery indicator is full and not charging. Escape closes the host window;
 it is not delivered as a game button.
 
@@ -162,3 +162,82 @@ The later 300-frame name-entry run is a native/visual smoke test. It is outside
 the current ARM comparison, and neither result proves physical-device fidelity.
 Receipts and screenshots stay local under ignored `build/`; original assets and
 generated translations are not included in source control.
+
+## Keyboard-to-menu milestone
+
+`src/keyboard.cpp` translates physical scan-code transitions into button edges
+and a held touch target. The host publishes 12-byte event nodes in reserved RAM
+at `0x11001000`, with type at `+0`, state at `+1` (2 down, 1 up), and next at
+`+8`. Context `+0x30` points to the list for one frame. Native `0x180102FC` consumes
+these nodes and polls `InputEvents[0]` for the wheel word through its second
+output pointer. Bit 30 denotes contact; the low byte carries the angle.
+`InputEvents[1]` acknowledges a host-owned node without freeing game memory.
+
+Phase button types are Menu 1, Select 2, Previous 3, Next 4, and Play/Pause 5.
+They are bound to W, S (or Enter), A, D, and X respectively. An initial mapping
+copied from another title incorrectly made A open Exit Game. The corrected
+mapping is covered by button-event tests and a native W-to-Exit-Game check.
+Windows key repeat does not create new edges; focus loss releases held keys.
+If an injected Windows key event omits its scan code, the host resolves it from
+the virtual key before passing it through the same adapter.
+
+The user-facing wheel angles run clockwise from O at the top. Adjacent held
+keys are averaged as unit vectors, so O+P targets 22.5° and I+O targets 337.5°.
+Native `0x18005764` converts the SDK angle to Cartesian cosine/sine components;
+the host converts clockwise-from-top angles to the counterclockwise-from-right
+byte convention (top 64, right 0). The name-entry replay confirms the resulting
+scroll direction. It does not establish physical electrode calibration.
+
+On first contact, the finger attaches at the target without sweeping from its
+old position. While held, it moves at most four angle-byte units (5.625°) per
+game tick along the shortest arc. New targets can reverse that movement without
+overshoot. Release and ambiguous symmetric chords remove contact immediately.
+The state advances once per frame, so repeated SDK polls cannot accelerate it.
+Tests cover every anchor and adjacent midpoint, intermediate samples, reversal,
+wraparound, reattachment, release, and button/touch separation.
+
+### Services reached after confirming a name
+
+The game creates the profile through `Users[4]`, obtains its ID through
+`Users[8]`, and creates its native save object. The host provides up to five
+session-local profiles with opaque handles, index/ID lookup (`Users[1,2]`), count
+(`Users[0]`), and name lookup (`Users[5]`). No profile is fabricated to skip the
+name-entry screen. Rename/delete and persistence are not implemented.
+
+Save-store ordinals differ from the asynchronous asset-read API:
+
+| Service | Implemented session contract | Evidence |
+| --- | --- | --- |
+| `AsyncFileIO[12]` | Open kind-1 record; write slot through R2; zero success | Native `0x18023F18`, firmware `0x0829EEB8` |
+| `AsyncFileIO[16]` | Replace slot record with R2 bytes from R1; zero success | Native `0x18023EEC`, firmware `0x0829EF30` |
+| `AsyncFileIO[14]` | Release slot; zero success | Native `0x18023F4C`, firmware `0x0829EEA0` |
+| `AsyncFileIO[0]`, kind 1/flag 0 | Queue read of session record, or missing-file result | Native request following profile creation |
+
+Four simultaneous save slots and 100 KiB per record bound this preview adapter.
+Records live in a separate memory map and are never written into the asset
+directory. The native game serializes the `default`/`save_1` data; the host does
+not invent their contents. Closing the process discards both profiles and saves.
+Host tests verify profile lookup and save write/close/reopen/readback behavior.
+
+Metadata 45/47/57/61 expose one empty library browser, reset/filter it, and
+return zero playlists. Firmware `0x082A0204`, `0x0829F6C0`, `0x082A0A10`, and the
+caller at `0x180416C4` establish this startup path. No host music is indexed yet.
+SoundEffect 33 supplies a silent-preview rate default to setter 15; 35 reports
+silent voices finished. Audio 40 supplies the preview repeat mode. These remain
+limited silent-audio conventions, not playback-fidelity claims.
+
+### Menu verification
+
+`tests/menu-input.txt` sends only key transitions: S adds A, overlapping
+touch keys rotate to the checkmark, and S confirms. `tests/verify_menu.py`
+executes 400 original frames, checks that profile/save/library calls occurred,
+and compares a rendered text mask against the visually verified main menu.
+A second replay presses W and verifies the original Exit Game confirmation.
+Image and asset hashes bind these checks to the tested build; no game images
+are checked into source control. The visible Windows path also reached the
+Select Song screen during keyboard interaction.
+
+This verifies original menu navigation through the host input boundary. It
+does not verify song playback, click-wheel judgment timing, or saved profiles
+across process restarts. `--input-script` is a deterministic test facility whose
+rows contain frame number, hexadecimal physical scan code, and 1/0 held state.

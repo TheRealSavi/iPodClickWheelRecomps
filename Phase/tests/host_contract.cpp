@@ -1,5 +1,6 @@
 // Authored service-contract fixtures. No original executable or assets required.
 #include "host.h"
+#include "keyboard.h"
 #include "runtime/memory.h"
 
 #include <algorithm>
@@ -44,6 +45,71 @@ void deliver(uint32_t expected = request) {
 }  // namespace
 
 int test_host(const std::filesystem::path& assets) {
+    phase::input::Keyboard keyboard;
+    constexpr std::array<unsigned, 8> ring{0x18, 0x19, 0x27, 0x35, 0x34, 0x33, 0x25, 0x17};
+    for (unsigned i = 0; i < 8; ++i) {
+        keyboard.key(ring[i], true);
+        keyboard.advance();
+        require(keyboard.wheel() == (0x40000000u | ((64 - i * 32) & 255)), "single wheel position");
+        keyboard.key(ring[(i + 1) % 8], true);
+        for (unsigned frame = 0; frame < 4; ++frame)
+            keyboard.advance();
+        require(keyboard.wheel() == (0x40000000u | ((64 - i * 32 - 16) & 255)),
+                "circular chord midpoint");
+        require(keyboard.take_buttons().empty(), "touch key generated button");
+        keyboard.release_all();
+        keyboard.advance();
+        require(!(keyboard.wheel() & 0x40000000u), "finger not lifted");
+    }
+    keyboard.key(0x18, true);
+    keyboard.key(0x34, true);
+    keyboard.advance();
+    require(!(keyboard.wheel() & 0x40000000u), "opposite keys produced arbitrary angle");
+    keyboard.release_all();
+    keyboard.key(0x1c, true);
+    keyboard.key(0x1c, true);
+    keyboard.release_all();
+    auto buttons = keyboard.take_buttons();
+    require(buttons.size() == 2 && buttons[0].button == 2 && buttons[0].down && !buttons[1].down,
+            "button repeat/release");
+    keyboard.key(0x1f, true);
+    keyboard.key(0x1c, true);
+    keyboard.key(0x1f, false);
+    buttons = keyboard.take_buttons();
+    require(buttons.size() == 1 && buttons[0].down,
+            "Select aliases generated duplicate or premature release");
+    keyboard.key(0x1c, false);
+    buttons = keyboard.take_buttons();
+    require(buttons.size() == 1 && !buttons[0].down, "last Select alias did not release");
+    phase::input::Keyboard sweep;
+    sweep.key(0x18, true);
+    sweep.advance();
+    sweep.key(0x19, true);
+    sweep.advance();
+    require((sweep.wheel() & 255) == 60, "first intermediate missing");
+    sweep.advance();
+    require((sweep.wheel() & 255) == 56, "second intermediate missing");
+    sweep.key(0x19, false);
+    sweep.advance();
+    require((sweep.wheel() & 255) == 60, "direction reversal overshot");
+    sweep.release_all();
+    sweep.advance();
+    require(!(sweep.wheel() & 0x40000000u), "released sweep kept moving");
+    sweep.key(0x27, true);
+    sweep.advance();
+    require((sweep.wheel() & 255) == 0, "reattach did not start at target");
+    sweep.key(0x35, true);
+    sweep.advance();
+    require((sweep.wheel() & 255) == 252, "wraparound took long route");
+    constexpr std::array<unsigned, 5> button_keys{0x11, 0x1f, 0x1e, 0x20, 0x2d};
+    for (unsigned i = 0; i < button_keys.size(); ++i) {
+        keyboard.key(button_keys[i], true);
+        keyboard.key(button_keys[i], false);
+        const auto events = keyboard.take_buttons();
+        require(events.size() == 2 && events[0].button == i + 1 && events[1].button == i + 1 &&
+                    events[0].down && !events[1].down,
+                "button identity or edges");
+    }
     phase::host::initialize(assets, false);
     name("fixture.bin");
     fresh_request(1);
@@ -111,6 +177,55 @@ int test_host(const std::filesystem::path& assets) {
                 ld32(request + 0x100) == 0,
             "completion order");
     phase::host::begin_frame(context);
+
+    phase::host::key(0x11, true);
+    phase::host::key(0x11, false);
+    phase::host::begin_frame(context);
+    auto node = ld32(context + 0x30);
+    require(ld8(node) == 1 && ld8(node + 1) == 2, "Menu press node");
+    node = ld32(node + 8);
+    require(ld8(node) == 1 && ld8(node + 1) == 1 && !ld32(node + 8), "Menu release node");
+    call("InputEvents", 1, {node, 0, 0, 0});
+    phase::host::begin_frame(context);
+    require(!ld32(context + 0x30), "input repeated next frame");
+    phase::host::key(0x18, true);
+    phase::host::key(0x19, true);
+    phase::host::begin_frame(context);
+    call("InputEvents", 0, {destination, destination + 4, 0, 0});
+    require(ld32(destination + 4) == 0x40000030, "wheel poll midpoint");
+    phase::host::key(0x18, false);
+    phase::host::key(0x19, false);
+
+    require(call("Users", 0, {0, 0, 0, 0}) == 0, "session started with profiles");
+    name("Tester");
+    const auto profile = call("Users", 4, {path, 0, 0, 0});
+    require(profile && call("Users", 0, {0, 0, 0, 0}) == 1, "profile creation");
+    const auto id = call("Users", 8, {profile, 0, 0, 0});
+    require(call("Users", 1, {0, 0, 0, 0}) == profile && call("Users", 2, {id, 0, 0, 0}) == profile,
+            "profile lookup");
+    require(std::strcmp(
+                reinterpret_cast<char*>(guest_pointer(call("Users", 5, {profile, 0, 0, 0}), 32)),
+                "Tester") == 0,
+            "profile name");
+    name("save_fixture");
+    require(call("AsyncFileIO", 12, {1, path, destination, 0}) == 0, "save open");
+    const auto slot = ld32(destination);
+    std::memcpy(guest_pointer(destination + 16, 6), "saved!", 6);
+    require(call("AsyncFileIO", 16, {slot, destination + 16, 6, 0}) == 0, "save write");
+    require(call("AsyncFileIO", 14, {slot, 0, 0, 0}) == 0, "save close");
+    require(call("AsyncFileIO", 16, {slot, destination + 16, 6, 0}) == 8,
+            "closed save handle accepted");
+    fresh_request(1);
+    call("AsyncFileIO", 0, {1, path, 0, request});
+    deliver();
+    st8(request + 0x10, 3);
+    st32(request + 0x20, destination);
+    st32(request + 0x24, 6);
+    call("AsyncFileIO", 2, {request, 0, 0, 0});
+    deliver();
+    require(std::memcmp(guest_pointer(destination, 6), "saved!", 6) == 0, "session save readback");
+    require(call("Metadata", 45, {0, 0, 0, 0}) == 0 && call("Metadata", 61, {0, 0, 0, 0}) == 0,
+            "empty library contract");
 
     call("OpenGLES", 18, {0x10000, 0x8000, 0, 0x4000});
     call("OpenGLES", 56, {0xb00, destination, 0, 0});

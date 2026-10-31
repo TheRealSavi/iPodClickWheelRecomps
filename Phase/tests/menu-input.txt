@@ -1,0 +1,12 @@
+# Select A, rotate counterclockwise through adjacent chords to the checkmark,
+# then confirm. Columns: frame, physical scan code (hex), held (1/0).
+200 1f 1
+202 1f 0
+210 18 1
+220 17 1
+230 18 0
+240 25 1
+250 17 0
+250 25 0
+270 1f 1
+272 1f 0
