@@ -7,10 +7,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
-from test_recompiler import emit, ENTRY
+from test_recompiler import ENTRY, emit
 
 words = [0xE16FCF11, 0x116F1F10]
 words += [0xE103B054 | (kind << 21) for kind in range(4)]
@@ -35,7 +34,7 @@ for index, word in enumerate(words):
     sources.append(source.replace("f_18000100", f"fixture_{index}"))
 dispatch = "\n".join(f"case {i}: fixture_{i}(cpu); return;" for i in range(len(words)))
 (ROOT / "gen/instruction-fixtures.h").write_text(
-    "#pragma once\nnamespace phase::game {\n"
+    '#pragma once\n#include "runtime/memory.h"\n#include "runtime/runtime.h"\nnamespace phase::game {\n'
     + "\n".join(sources)
     + "\nvoid instruction_fixture(unsigned i, Cpu& cpu) { switch(i) {\n"
     + dispatch
@@ -89,6 +88,7 @@ for index, word in enumerate(words):
         cases.append([index, flags] + values + memory)
 result = subprocess.run(
     [str(ROOT / "build/phase-startup.exe"), "--instructions"],
+    check=False,
     input="\n".join(" ".join(map(str, case)) for case in cases),
     text=True,
     capture_output=True,

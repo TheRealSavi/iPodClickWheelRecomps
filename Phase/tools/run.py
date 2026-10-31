@@ -2,8 +2,8 @@
 
 import argparse
 import json
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 from image_contract import IMAGE_SHA256, checked_image
 
@@ -14,14 +14,33 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=15)
+    parser.add_argument("--assets", type=Path)
+    parser.add_argument("--visible", action="store_true")
+    parser.add_argument("--frames", type=int, default=300)
+    parser.add_argument("--screenshot", type=Path)
     args = parser.parse_args()
     checked_image(args.image)
     if not 0 < args.timeout <= 60:
         parser.error("timeout must be between zero and 60 seconds")
+    if not 1 <= args.frames <= 10000:
+        parser.error("frames must be between 1 and 10000")
+    if not args.assets and (args.visible or args.screenshot):
+        parser.error("--visible and --screenshot require --assets")
     command = [str(PROJECT / "build/phase-startup.exe"), str(args.image.resolve())]
+    if args.assets:
+        command += [
+            "--assets",
+            str(args.assets.resolve()),
+            "--frames",
+            str(args.frames),
+        ]
+    if args.visible:
+        command += ["--visible"]
+    if args.screenshot:
+        command += ["--screenshot", str(args.screenshot.resolve())]
     try:
         result = subprocess.run(
-            command, capture_output=True, text=True, timeout=args.timeout
+            command, capture_output=True, text=True, timeout=args.timeout, check=False
         )
         receipt = {
             "image_sha256": IMAGE_SHA256,

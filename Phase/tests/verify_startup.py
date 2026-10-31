@@ -7,11 +7,11 @@ Private memory snapshots and the receipt stay under Phase/build/.
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import re
 import struct
 import subprocess
 import sys
+from pathlib import Path
 
 import unicorn as u
 from unicorn import arm_const as a
@@ -34,23 +34,47 @@ REGISTERS = [getattr(a, f"UC_ARM_REG_R{i}") for i in range(15)]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", type=Path, required=True)
+    parser.add_argument(
+        "--assets",
+        type=Path,
+        help="also verify three rendered frames and archive loading",
+    )
     args = parser.parse_args()
     image = EAppImage(checked_image(args.image))
-    dump = PROJECT / "build/startup-native"
+    dump = PROJECT / (
+        "build/graphics-native" if args.assets else "build/startup-native"
+    )
+    screenshot = PROJECT / "build/verified-graphics.ppm"
     native = subprocess.run(
         [
             str(PROJECT / "build/phase-startup.exe"),
             str(args.image.resolve()),
             "--dump-state",
             str(dump),
+            *(
+                [
+                    "--assets",
+                    str(args.assets.resolve()),
+                    "--frames",
+                    "3",
+                    "--screenshot",
+                    str(screenshot),
+                ]
+                if args.assets
+                else []
+            ),
         ],
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=30,
+        check=False,
     )
     # This is an acceptance boundary, not a generic 'any failure is success'.
     expected_stop = "unimplemented OpenGLES[52], lr=180610f8"
-    if native.returncode != 2 or expected_stop not in native.stderr:
+    if args.assets:
+        if native.returncode or "STAGE frame-returned=2 state=1" not in native.stderr:
+            raise AssertionError(native.stderr)
+    elif native.returncode != 2 or expected_stop not in native.stderr:
         raise AssertionError(native.stderr)
     machine = u.Uc(u.UC_ARCH_ARM, u.UC_MODE_ARM)
     for base, length in REGIONS:
@@ -64,6 +88,86 @@ def main():
     clock_us = 0
     calls = []
     stopped = False
+    objects = {51: 1, 52: 1}
+    texture_mode = 0x2100
+    files = {}
+    next_file = 1
+    completions = []
+
+    def read32(address):
+        return struct.unpack("<I", machine.mem_read(address, 4))[0]
+
+    def write32(address, value):
+        machine.mem_write(address, struct.pack("<I", value))
+
+    def string_at(address):
+        return bytes(machine.mem_read(address, 1024)).split(b"\0", 1)[0].decode()
+
+    def graphics_sdk(thunk, values):
+        nonlocal texture_mode, next_file
+        ordinal = thunk.ordinal
+        r0, r1, r2, r3 = values[:4]
+        result = 0
+        if thunk.framework == "OpenGLES":
+            if ordinal in (51, 52):
+                for i in range(r0):
+                    write32(r1 + 4 * i, objects[ordinal])
+                    objects[ordinal] += 1
+            elif ordinal == 127:
+                assert (r0, r1) == (0x2300, 0x2200)
+                texture_mode = r2
+            elif ordinal == 63:
+                assert (r0, r1) == (0x2300, 0x2200)
+                write32(r2, texture_mode)
+            elif ordinal in (140, 160, 165):
+                result = 1
+            elif ordinal == 71:
+                assert r0 == 0xC11  # scissor was never enabled
+            elif ordinal not in (0, 5, 8, 9, 14, 18, 28, 32, 36, 163):
+                raise AssertionError((thunk.framework, ordinal))
+        elif thunk.framework == "InputEvents" and ordinal == 0:
+            write32(r0, 0)
+            write32(r1, 0)
+        elif thunk.framework == "AsyncFileIO":
+            request = r3 if ordinal == 0 else r0
+            obj = read32(request + 0x14)
+            count = 0
+            if ordinal == 0:
+                assert (r0, r2) == (0, 1)
+                name = string_at(r1)
+                assert name in ("main.hdr", "main_0.ark")
+                content = (args.assets / name).read_bytes()
+                files[next_file] = [content, 0]
+                write32(request + 0x34, next_file)
+                next_file += 1
+                count = len(content)
+                write32(request + 0x30, 0)
+                assert not read32(request + 0x20)
+            elif ordinal in (1, 2):
+                handle = read32(request + 0x34)
+                operation = machine.mem_read(request + 0x10, 1)[0]
+                if operation == 2:
+                    del files[handle]
+                else:
+                    assert operation == 3
+                    content, position = files[handle]
+                    chunk = content[position : position + read32(request + 0x24)]
+                    machine.mem_write(read32(request + 0x20), chunk)
+                    count = len(chunk)
+                    files[handle][1] += count
+                    write32(request + 0x30, files[handle][1])
+            else:
+                raise AssertionError((thunk.framework, ordinal))
+            write32(request + 0x28, 0)
+            write32(request + 0x2C, count)
+            if obj:
+                write32(obj + 8, count)
+            write32(request, 0)
+            completions.append(request)
+            result = 1
+        else:
+            raise AssertionError((thunk.framework, ordinal))
+        machine.reg_write(a.UC_ARM_REG_R0, result)
 
     def sdk(uc, address, size, user):
         nonlocal next_arena, clock_us, stopped
@@ -83,6 +187,8 @@ def main():
             clock_us += 1
             uc.mem_write(values[0], struct.pack("<I", clock_us))
             uc.reg_write(a.UC_ARM_REG_R0, clock_us)
+        elif args.assets:
+            graphics_sdk(thunk, values)
         else:
             if (thunk.framework, thunk.ordinal, values[14]) != (
                 "OpenGLES",
@@ -105,14 +211,23 @@ def main():
         machine.reg_write(a.UC_ARM_REG_R2, 0)
         machine.reg_write(a.UC_ARM_REG_R3, 0)
         machine.reg_write(a.UC_ARM_REG_LR, sentinel)
-        machine.emu_start(entry, sentinel, timeout=10_000_000, count=5_000_000)
+        machine.emu_start(entry, sentinel, timeout=30_000_000, count=30_000_000)
         if not stopped and machine.reg_read(a.UC_ARM_REG_PC) != sentinel:
             raise AssertionError("ARM execution exhausted its budget")
 
     execute(image.u32(0x18000014))
-    clock_us += 16667
-    execute(image.u32(0x18000024))
-    assert stopped, "did not reach graphics boundary"
+    for frame in range(3 if args.assets else 1):
+        if args.assets:
+            write32(context + 0x38, 0x11010000)
+            head = 0
+            for request in reversed(completions):
+                write32(request, head)
+                head = request
+            completions.clear()
+            write32(context + 0x2C, head)
+        clock_us += 16667
+        execute(image.u32(0x18000024))
+    assert bool(args.assets) or stopped, "did not reach graphics boundary"
     native_calls = re.findall(r"^SDK .*$", native.stderr, re.MULTILINE)
     assert native_calls == calls, (native_calls, calls)
     comparisons = []
@@ -141,17 +256,36 @@ def main():
         machine.reg_read(a.UC_ARM_REG_CPSR)
     ]
     assert native_registers == arm_registers, (native_registers, arm_registers)
+    if args.assets:
+        framebuffer = machine.mem_read(0x11010000, 320 * 240 * 2)
+        rgb = bytearray()
+        for (pixel,) in struct.iter_unpack("<H", framebuffer):
+            rgb.extend(
+                (
+                    (pixel >> 11) * 255 // 31,
+                    ((pixel >> 5) & 63) * 255 // 63,
+                    (pixel & 31) * 255 // 31,
+                )
+            )
+        assert screenshot.read_bytes() == b"P6\n320 240\n255\n" + rgb
     receipt = {
         "image_sha256": IMAGE_SHA256,
         "sdk_calls": len(calls),
-        "stop": expected_stop,
+        "stop": "three complete frames" if args.assets else expected_stop,
         "memory": comparisons,
         "registers_match": True,
-        "scope": "Original initialization and first-frame prefix with identical arena and diagnostic-clock adapters; no renderer or audio.",
+        "scope": "Original initialization and three frames, native software framebuffer, header read and archive open; identical diagnostic host contracts, no audio/input fidelity."
+        if args.assets
+        else "Original initialization and first-frame prefix with identical arena and diagnostic-clock adapters; no renderer or audio.",
     }
-    (PROJECT / "build/startup-verification.json").write_text(
-        json.dumps(receipt, indent=2) + "\n"
-    )
+    (
+        PROJECT
+        / (
+            "build/graphics-verification.json"
+            if args.assets
+            else "build/startup-verification.json"
+        )
+    ).write_text(json.dumps(receipt, indent=2) + "\n")
     print(json.dumps(receipt, indent=2))
 
 

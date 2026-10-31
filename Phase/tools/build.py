@@ -2,9 +2,9 @@
 
 import argparse
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[1]
 
@@ -62,6 +62,11 @@ def main() -> None:
         f'/I"{PROJECT / "gen"}"',
         *[f'"{p}"' for p in sources],
         f'"{PROJECT / "src/main.cpp"}"',
+        f'"{PROJECT / "src/host.cpp"}"',
+        f'"{PROJECT / "tests/host_contract.cpp"}"',
+        "opengl32.lib",
+        "gdi32.lib",
+        "user32.lib",
         "/Fe:phase-startup.exe",
         "/Fo:obj\\",
     ]
@@ -78,6 +83,7 @@ def main() -> None:
             cwd=build,
             stdout=log,
             stderr=subprocess.STDOUT,
+            check=False,
         )
     if result.returncode:
         print((build / "build.log").read_text(errors="replace")[-8000:])
