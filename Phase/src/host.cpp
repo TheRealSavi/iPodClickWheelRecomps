@@ -42,6 +42,8 @@ std::map<uint32_t, File> files;
 uint32_t next_file = 1, next_buffer = 1;
 persistence::Store storage;
 constexpr uint32_t profile_base = 0x11004000;
+std::map<uint32_t, uint32_t> profile_handles;  // Guest handle -> stable profile ID.
+uint32_t brightness = 100;  // Window-only backlight emulation; never alters the monitor.
 std::map<uint32_t, persistence::RecordKey> save_slots;
 constexpr uint32_t framebuffer = 0x11010000;
 uint32_t arg(const Cpu& cpu, unsigned index) {
@@ -64,6 +66,19 @@ std::string string_at(uint32_t address) {
         result += c;
     }
     fatal("unterminated asset path");
+}
+uint32_t expose_profile(const persistence::Profile& profile) {
+    for (unsigned slot = 0; slot < 5; ++slot) {
+        const auto handle = profile_base + slot * 64;
+        if (profile_handles.count(handle))
+            continue;
+        auto* bytes = guest_pointer(handle, 32);
+        std::memset(bytes, 0, 32);
+        std::memcpy(bytes, profile.name.c_str(), profile.name.size() + 1);
+        profile_handles.emplace(handle, profile.id);
+        return handle;
+    }
+    fatal("profile handle limit exceeded");
 }
 LRESULT CALLBACK window_proc(HWND handle, UINT message, WPARAM w, LPARAM l) {
     if (message == WM_CLOSE) {
@@ -335,9 +350,12 @@ bool graphics(Cpu& cpu, unsigned ordinal) {
         std::vector<uint8_t> rgb(320 * 240 * 3);
         for (unsigned i = 0; i < 320 * 240; ++i) {
             auto p = ld16(framebuffer + i * 2);
-            rgb[i * 3] = uint8_t((p >> 11) * 255 / 31);
-            rgb[i * 3 + 1] = uint8_t(((p >> 5) & 63) * 255 / 63);
-            rgb[i * 3 + 2] = uint8_t((p & 31) * 255 / 31);
+            // Keep zero readable like an LCD at minimum backlight. This is a
+            // host presentation curve, not a claim about physical iPod luminance.
+            const auto scale = 20 + brightness * 80 / 100;
+            rgb[i * 3] = uint8_t((p >> 11) * 255 / 31 * scale / 100);
+            rgb[i * 3 + 1] = uint8_t(((p >> 5) & 63) * 255 / 63 * scale / 100);
+            rgb[i * 3 + 2] = uint8_t((p & 31) * 255 / 31 * scale / 100);
         }
         glPushAttrib(GL_ALL_ATTRIB_BITS);
         glPushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
@@ -376,11 +394,8 @@ bool graphics(Cpu& cpu, unsigned ordinal) {
 void initialize(const std::filesystem::path& assets, bool visible, bool sound,
                 const std::filesystem::path& music_root, const std::filesystem::path& save_root) {
     storage.open(save_root, {assets, music_root});
-    for (size_t i = 0; i < storage.state().profiles.size(); ++i) {
-        const auto& name = storage.state().profiles[i];
-        std::memcpy(guest_pointer(profile_base + uint32_t(i) * 64, 32), name.c_str(),
-                    name.size() + 1);
-    }
+    for (const auto& profile : storage.state().profiles)
+        expose_profile(profile);
     audio::initialize(sound);
     if (!music_root.empty())
         library::open(music_root);
@@ -434,6 +449,16 @@ bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
         return library::service(cpu, ordinal);
     if (std::strcmp(framework, "Audio") == 0 || std::strcmp(framework, "SoundEffect") == 0)
         return audio::service(cpu, framework, ordinal);
+    if (std::strcmp(framework, "miscTBD") == 0 && (ordinal == 1 || ordinal == 2)) {
+        if (ordinal == 1) {
+            // Firmware 082a2538 -> 081971c0 clamps a signed percentage.
+            brightness = uint32_t(std::clamp(int32_t(cpu.r[0]), 0, 100));
+            std::fprintf(stderr, "DISPLAY brightness=%u\n", brightness);
+            cpu.r[0] = 0;
+        } else
+            cpu.r[0] = brightness;
+        return true;
+    }
     // Native 180051f8 clamps this battery-gauge reading to 22 (full).
     if (std::strcmp(framework, "miscTBD") == 0 && ordinal == 6) {
         cpu.r[0] = 22;
@@ -475,27 +500,53 @@ bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
             const auto name = string_at(cpu.r[0]);
             if (name.empty() || name.size() > 31 || storage.state().profiles.size() >= 5)
                 fatal("invalid preview profile");
-            auto handle = profile_base + uint32_t(storage.state().profiles.size()) * 64;
-            storage.add_profile(name);
-            std::memcpy(guest_pointer(handle, 32), name.c_str(), name.size() + 1);
-            cpu.r[0] = handle;
+            const auto id = storage.add_profile(name);
+            cpu.r[0] = expose_profile({id, name});
             return true;
         }
         if (ordinal == 1 || ordinal == 2) {
-            unsigned index = ordinal == 1 ? cpu.r[0] : cpu.r[0] - 1;
-            cpu.r[0] = index < storage.state().profiles.size() ? profile_base + index * 64 : 0;
+            const auto& profiles = storage.state().profiles;
+            const auto id =
+                ordinal == 1 ? (cpu.r[0] < profiles.size() ? profiles[cpu.r[0]].id : 0) : cpu.r[0];
+            cpu.r[0] = 0;
+            for (const auto& [handle, profile_id] : profile_handles)
+                if (profile_id == id)
+                    cpu.r[0] = handle;
             return true;
         }
+        if (ordinal != 3 && ordinal != 5 && ordinal != 8 && ordinal != 9)
+            return false;
         const auto handle = cpu.r[0];
-        if (handle < profile_base || (handle - profile_base) % 64 ||
-            (handle - profile_base) / 64 >= storage.state().profiles.size())
+        const auto found = profile_handles.find(handle);
+        if (ordinal == 3 && found == profile_handles.end()) {
+            cpu.r[0] = 0;  // Firmware returns false when no matching object exists.
+            return true;
+        }
+        if (ordinal == 9 && !handle)
+            return true;  // Firmware's null-object no-op.
+        if (found == profile_handles.end())
             fatal("invalid profile handle");
+        if (ordinal == 3) {
+            storage.delete_profile(found->second);
+            profile_handles.erase(found);
+            std::memset(guest_pointer(handle, 32), 0, 32);
+            cpu.r[0] = 1;
+            return true;
+        }
+        if (ordinal == 9) {
+            const auto name = string_at(cpu.r[1]);
+            storage.rename_profile(found->second, name);
+            std::memset(guest_pointer(handle, 32), 0, 32);
+            std::memcpy(guest_pointer(handle, 32), name.c_str(), name.size() + 1);
+            cpu.r[0] = 0;
+            return true;
+        }
         if (ordinal == 5) {
             cpu.r[0] = handle;
             return true;
         }
         if (ordinal == 8) {
-            cpu.r[0] = (handle - profile_base) / 64 + 1;
+            cpu.r[0] = found->second;
             return true;
         }
     }
@@ -582,6 +633,8 @@ void close() {
     audio::close();
     library::close();
     storage.close();
+    profile_handles.clear();
+    brightness = 100;
     save_slots.clear();
     next_file = next_buffer = 1;
     quitting = false;

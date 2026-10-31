@@ -232,6 +232,28 @@ int test_host(const std::filesystem::path& assets) {
                 reinterpret_cast<char*>(guest_pointer(call("Users", 5, {profile, 0, 0, 0}), 32)),
                 "Tester") == 0,
             "profile name");
+    name("Renamed");
+    call("Users", 9, {profile, path, 0, 0});
+    require(std::strcmp(reinterpret_cast<char*>(guest_pointer(profile, 32)), "Renamed") == 0 &&
+                call("Users", 8, {profile, 0, 0, 0}) == id,
+            "rename changed identity or failed to replace name");
+    name("Second");
+    const auto second = call("Users", 4, {path, 0, 0, 0});
+    const auto second_id = call("Users", 8, {second, 0, 0, 0});
+    require(call("Users", 3, {profile, 0, 0, 0}) == 1 &&
+                call("Users", 3, {profile, 0, 0, 0}) == 0 && call("Users", 2, {id, 0, 0, 0}) == 0 &&
+                call("Users", 1, {0, 0, 0, 0}) == second &&
+                call("Users", 8, {second, 0, 0, 0}) == second_id,
+            "delete renumbered or invalidated another profile");
+    name("Third");
+    const auto third = call("Users", 4, {path, 0, 0, 0});
+    require(call("Users", 8, {third, 0, 0, 0}) > second_id,
+            "new profile inherited a deleted identity");
+    for (const auto [input, expected] : std::array<std::pair<uint32_t, uint32_t>, 4>{
+             {{42, 42}, {101, 100}, {0xffffffff, 0}, {100, 100}}}) {
+        require(call("miscTBD", 1, {input, 0, 0, 0}) == 0 && call("miscTBD", 2, {}) == expected,
+                "brightness percentage/clamp/readback");
+    }
     name("save_fixture");
     require(call("AsyncFileIO", 12, {1, path, destination, 0}) == 0, "save open");
     const auto slot = ld32(destination);

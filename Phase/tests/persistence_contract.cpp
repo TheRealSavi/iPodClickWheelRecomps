@@ -27,12 +27,24 @@ int test_persistence(const std::filesystem::path& directory, const std::string& 
         store.write("save_1.dtb", {0, 255, 3, 17});
         store.write("save_2.dtb", {6, 5, 4});
     } else if (mode == "verify" || mode == "verify-backup") {
-        require(store.state().profiles == std::vector<std::string>{"Alice", "Bob"},
+        require(store.state().profiles ==
+                    std::vector<phase::persistence::Profile>{{1, "Alice"}, {2, "Bob"}},
                 "profiles/IDs did not survive restart");
         require(store.state().records.at({1, "save_1.dtb"}) == std::vector<uint8_t>{0, 255, 3, 17},
                 "opaque record changed on restart");
         require(store.state().records.count({1, "save_2.dtb"}) == (mode == "verify" ? 1 : 0),
                 "wrong snapshot generation");
+    } else if (mode == "edit-profiles") {
+        store.rename_profile(2, "Robert");
+        store.delete_profile(1);
+        require(store.add_profile("Carol") == 3, "deleted ID was reused");
+    } else if (mode == "verify-edits") {
+        require(store.state().profiles ==
+                    std::vector<phase::persistence::Profile>{{2, "Robert"}, {3, "Carol"}},
+                "rename/delete IDs changed on restart");
+        require(!store.state().records.count({1, "save_1.dtb"}) &&
+                    store.state().records.at({1, "save_2.dtb"}) == std::vector<uint8_t>{6, 5, 4},
+                "deletion removed another player's scores or kept deleted scores");
     } else if (mode == "update") {
         store.write("save_2.dtb", {6, 5, 4});
     } else if (mode == "failed-write") {

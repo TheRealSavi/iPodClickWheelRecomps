@@ -88,14 +88,20 @@ No game assets, music, iTunesDB, or Phase charts are modified.
 commit. An unreadable primary is recovered from the backup, with a log message.
 If neither is valid, startup stops without creating a replacement profile.
 One running process may use a save directory at a time. Copy the entire directory
-while Phase is closed to back up or move profiles. Profile rename/delete is not
-yet implemented.
+while Phase is closed to back up or move profiles. Rename and delete work through
+Manage Users. IDs remain stable after deletion; a new player never inherits a
+deleted ID. Older host snapshots load automatically and upgrade on the next write.
 
 `tests/verify_persistence.py --image PATH --assets PATH` creates a profile in an
 isolated directory and verifies that a second process loads its native save and
 renders the main menu without input. Authored cross-process tests cover record
 bytes, stable IDs, recovery, interrupted staging, write failures, and locking.
 See [persistence evidence](analysis/persistence.md).
+
+The menu sweep also added Brightness: the game's percentage control dims only
+the preview window. It resets to full brightness on launch and does not change
+the Windows monitor setting. See [menu exploration](analysis/menu-exploration.md)
+for exercised paths, missing-command evidence, and remaining coverage limits.
 
 ## Keyboard controls
 

@@ -1,8 +1,10 @@
 """Verify durable host saves in separate processes, without original game assets."""
 
+import struct
 import subprocess
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 EXE = Path(__file__).resolve().parents[1] / "build/phase-startup.exe"
@@ -32,6 +34,38 @@ class PersistenceContracts(unittest.TestCase):
             self.run_store(directory, "namespaces")
             self.run_store(directory, "verify-namespaces")
 
+    def test_rename_delete_create_preserve_other_players(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.run_store(directory, "seed")
+            self.run_store(directory, "edit-profiles")
+            self.run_store(directory, "verify-edits")
+
+    def test_version_one_migrates_without_changing_native_records(self):
+        def word(n):
+            return struct.pack("<I", n)
+
+        def blob(data):
+            return word(len(data)) + data
+
+        legacy = b"PHSAVE01" + word(1) + word(2) + blob(b"Alice") + blob(b"Bob")
+        legacy += word(2)
+        for name, data in [
+            (b"save_1.dtb", bytes([0, 255, 3, 17])),
+            (b"save_2.dtb", bytes([6, 5, 4])),
+        ]:
+            legacy += word(1) + blob(name) + blob(data)
+        legacy += word(zlib.crc32(legacy))
+        with tempfile.TemporaryDirectory() as directory:
+            primary = Path(directory) / "state.bin"
+            primary.write_bytes(legacy)
+            self.run_store(directory, "verify")
+            self.assertEqual(
+                primary.read_bytes(), legacy, "read-only load rewrote snapshot"
+            )
+            self.run_store(directory, "edit-profiles")
+            self.assertEqual(primary.read_bytes()[8:12], word(2))
+            self.run_store(directory, "verify-edits")
+
     def test_corrupt_primary_recovers_previous_commit(self):
         with tempfile.TemporaryDirectory() as directory:
             self.run_store(directory, "seed")
@@ -57,7 +91,7 @@ class PersistenceContracts(unittest.TestCase):
             self.run_store(directory, "seed")
             primary = Path(directory) / "state.bin"
             data = bytearray(primary.read_bytes())
-            data[8:12] = (2).to_bytes(4, "little")
+            data[8:12] = (99).to_bytes(4, "little")
             primary.write_bytes(data)
             result = self.run_store(directory, "verify", success=False)
             self.assertIn("unsupported snapshot version", result.stderr)

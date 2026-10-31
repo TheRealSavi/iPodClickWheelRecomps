@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <set>
 #include <stdexcept>
 #include <windows.h>
 
@@ -66,8 +67,12 @@ void string(std::vector<uint8_t>& out, const std::string& value) {
 void validate(const State& state) {
     if (state.profiles.size() > 5 || state.records.size() > 32)
         fail("profile or record limit exceeded");
-    for (const auto& name : state.profiles)
-        if (name.empty() || name.size() > 31 || name.find('\0') != std::string::npos)
+    std::set<uint32_t> ids;
+    if (!state.next_profile_id || state.next_profile_id > 0x7fffffff)
+        fail("invalid next profile ID");
+    for (const auto& [id, name] : state.profiles)
+        if (!id || id >= state.next_profile_id || !ids.insert(id).second || name.empty() ||
+            name.size() > 31 || name.find('\0') != std::string::npos)
             fail("invalid profile name");
     for (const auto& [key, bytes] : state.records) {
         const auto& [kind, name] = key;
@@ -78,10 +83,13 @@ void validate(const State& state) {
 std::vector<uint8_t> encode(const State& state) {
     validate(state);
     std::vector<uint8_t> out(magic, magic + 8);
-    number(out, 1);  // Host snapshot version, independent of the native save version.
+    number(out, 2);  // Version 2 decouples persistent IDs from list positions.
+    number(out, state.next_profile_id);
     number(out, uint32_t(state.profiles.size()));
-    for (const auto& name : state.profiles)
+    for (const auto& [id, name] : state.profiles) {
+        number(out, id);
         string(out, name);
+    }
     number(out, uint32_t(state.records.size()));
     for (const auto& [key, bytes] : state.records) {
         number(out, key.first);
@@ -123,14 +131,21 @@ State read(const std::filesystem::path& path) {
         offset += length;
         return value;
     };
-    if (word() != 1)
+    const auto version = word();
+    if (version != 1 && version != 2)
         throw UnsupportedVersion();
     State state;
+    if (version == 2)
+        state.next_profile_id = word();
     auto count = word();
     if (count > 5)
         fail("too many profiles");
-    for (unsigned i = 0; i < count; ++i)
-        state.profiles.push_back(text(31));
+    for (unsigned i = 0; i < count; ++i) {
+        const auto id = version == 1 ? i + 1 : word();
+        state.profiles.push_back({id, text(31)});
+    }
+    if (version == 1)
+        state.next_profile_id = count + 1;
     count = word();
     if (count > 32)
         fail("too many records");
@@ -234,9 +249,34 @@ void Store::commit(State next) {
     }
     state_ = std::move(next);
 }
-void Store::add_profile(const std::string& name) {
+uint32_t Store::add_profile(const std::string& name) {
     auto next = state_;
-    next.profiles.push_back(name);
+    const auto id = next.next_profile_id++;
+    next.profiles.push_back({id, name});
+    commit(std::move(next));
+    return id;
+}
+void Store::rename_profile(uint32_t id, const std::string& name) {
+    auto next = state_;
+    const auto found = std::find_if(next.profiles.begin(), next.profiles.end(),
+                                    [id](const Profile& p) { return p.id == id; });
+    if (found == next.profiles.end())
+        fail("unknown profile ID");
+    found->name = name;
+    commit(std::move(next));
+}
+void Store::delete_profile(uint32_t id) {
+    auto next = state_;
+    const auto found = std::find_if(next.profiles.begin(), next.profiles.end(),
+                                    [id](const Profile& p) { return p.id == id; });
+    if (found == next.profiles.end())
+        fail("unknown profile ID");
+    next.profiles.erase(found);
+    // These are the two Phase-owned records for this ID. Other players' bytes
+    // and the game's selected-user/global statistics records remain untouched.
+    const auto prefix = "save_" + std::to_string(id);
+    next.records.erase({1, prefix + ".dtb"});
+    next.records.erase({1, prefix + "_back.dtb"});
     commit(std::move(next));
 }
 void Store::write(const std::string& name, std::vector<uint8_t> bytes, uint32_t kind) {

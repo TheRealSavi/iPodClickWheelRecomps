@@ -7,8 +7,8 @@ No original code, save data, game images, or generated translations are distribu
 
 `Users[4]` creates a named profile; `[0]` counts profiles; `[1]` looks up by index;
 `[2]` looks up by persistent ID; `[5]` gets the name; `[8]` gets the ID. The host
-retains profile order and one-based IDs across launches. Up to five profiles are
-supported. Native score records use that ID in their filenames.
+retains profile order and stable positive IDs across launches. Up to five profiles
+are supported. Native score records use that ID in their filenames.
 
 The native writer at `0x1803DB7C` constructs a 12-byte header containing a zero,
 total length, and additive checksum of payload words. It calls `0x18004B44`,
@@ -108,5 +108,17 @@ an in-progress song is not a verified resumable checkpoint.
   a game-earned score through serialization, shutdown, reload, and display;
   it does not establish long-song timing accuracy or every difficulty.
 
-Profile rename/delete, migration from physical iPod saves, all Marathon save
+Snapshot version 2 stores each profile's explicit ID and a monotonically increasing
+next ID. Version 1 loads with its original index-plus-one IDs and upgrades only
+on a subsequent mutation. Unsupported versions still fail without rolling back
+to a backup. Deleting one profile removes only its `save_<id>.dtb` and
+`save_<id>_back.dtb` records. Remaining players retain their exact record bytes
+and IDs. Guest handles occupy reusable slots separate from persistent IDs.
+Renaming preserves both identity and score records. The native game continues to
+own selection, default-user changes, and its global statistics serialization.
+
+`tests/verify_actions.py` exercises rename, reload, deletion of the last player,
+creation after deletion, deletion with another player present, and reloading that
+remaining player's original ID. See [menu exploration](menu-exploration.md) for
+the firmware contracts. Migration from physical iPod saves, all Marathon save
 paths, and long-term compatibility with other Phase builds remain unverified.
