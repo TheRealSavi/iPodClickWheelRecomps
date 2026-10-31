@@ -5,6 +5,7 @@
 #include "host.h"
 
 #include "audio.h"
+#include "ipod/platform/opengl_presenter.h"
 #include "keyboard.h"
 #include "library.h"
 #include "persistence.h"
@@ -31,6 +32,7 @@ HDC dc = nullptr;
 HGLRC rendering = nullptr;
 bool quitting = false;
 input::Keyboard keyboard;
+ipod::video::OpenGLPresenter presenter;
 constexpr uint32_t input_nodes = 0x11001000;
 std::filesystem::path asset_root;
 std::vector<uint32_t> completions;
@@ -44,6 +46,7 @@ persistence::Store storage;
 constexpr uint32_t profile_base = 0x11004000;
 std::map<uint32_t, uint32_t> profile_handles;  // Guest handle -> stable profile ID.
 uint32_t brightness = 100;  // Window-only backlight emulation; never alters the monitor.
+bool dimmed = false;
 std::map<uint32_t, persistence::RecordKey> save_slots;
 constexpr uint32_t framebuffer = 0x11010000;
 uint32_t arg(const Cpu& cpu, unsigned index) {
@@ -352,34 +355,14 @@ bool graphics(Cpu& cpu, unsigned ordinal) {
             auto p = ld16(framebuffer + i * 2);
             // Keep zero readable like an LCD at minimum backlight. This is a
             // host presentation curve, not a claim about physical iPod luminance.
-            const auto scale = 20 + brightness * 80 / 100;
+            const auto scale = 20 + (dimmed ? std::min(brightness, 20u) : brightness) * 80 / 100;
             rgb[i * 3] = uint8_t((p >> 11) * 255 / 31 * scale / 100);
             rgb[i * 3 + 1] = uint8_t(((p >> 5) & 63) * 255 / 63 * scale / 100);
             rgb[i * 3 + 2] = uint8_t((p & 31) * 255 / 31 * scale / 100);
         }
-        glPushAttrib(GL_ALL_ATTRIB_BITS);
-        glPushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
-        glDisable(GL_TEXTURE_2D);
-        glDisable(GL_BLEND);
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_SCISSOR_TEST);
-        glMatrixMode(GL_PROJECTION);
-        glPushMatrix();
-        glLoadIdentity();
-        glOrtho(0, 320, 240, 0, -1, 1);
-        glMatrixMode(GL_MODELVIEW);
-        glPushMatrix();
-        glLoadIdentity();
-        glRasterPos2i(0, 0);
-        glPixelZoom(1, -1);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glDrawPixels(320, 240, GL_RGB, GL_UNSIGNED_BYTE, rgb.data());
-        glPixelZoom(1, 1);
-        glPopMatrix();
-        glMatrixMode(GL_PROJECTION);
-        glPopMatrix();
-        glPopClientAttrib();
-        glPopAttrib();
+        RECT client{};
+        GetClientRect(window, &client);
+        presenter.present(rgb.data(), 320, 240, client.right, client.bottom);
         SwapBuffers(dc);
         cpu.r[0] = 1;
         return true;
@@ -407,7 +390,7 @@ void initialize(const std::filesystem::path& assets, bool visible, bool sound,
     wc.lpszClassName = L"PhaseBringup";
     if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
         fatal("RegisterClass failed");
-    const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    const DWORD style = WS_OVERLAPPEDWINDOW;
     RECT rect{0, 0, 320, 240};
     AdjustWindowRect(&rect, style, FALSE);
     window = CreateWindowW(wc.lpszClassName, L"Phase - Windows bring-up", style, CW_USEDEFAULT,
@@ -457,6 +440,14 @@ bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
             cpu.r[0] = 0;
         } else
             cpu.r[0] = brightness;
+        return true;
+    }
+    if (std::strcmp(framework, "miscTBD") == 0 && ordinal == 3) {
+        // Firmware 0829ef5c -> 08197184 temporarily caps backlight at 20;
+        // it does not replace the user's stored brightness percentage.
+        dimmed = cpu.r[0] != 0;
+        cpu.r[0] = 0;
+        std::fprintf(stderr, "DISPLAY dimmed=%u\n", unsigned(dimmed));
         return true;
     }
     // Native 180051f8 clamps this battery-gauge reading to 22 (full).
@@ -603,19 +594,29 @@ bool pump() {
 void screenshot(const std::filesystem::path& path) {
     if (!rendering)
         fatal("screenshot requires a graphics context");
-    std::vector<uint8_t> pixels(320 * 240 * 3);
+    RECT client{};
+    GetClientRect(window, &client);
+    const int width = client.right, height = client.bottom;
+    if (width <= 0 || height <= 0) {
+        // Optional diagnostics must not prevent the native shutdown save.
+        std::fprintf(stderr, "SCREENSHOT skipped: window has no drawable area\n");
+        return;
+    }
+    std::vector<uint8_t> pixels(size_t(width) * size_t(height) * 3);
     glReadBuffer(GL_FRONT);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, 320, 240, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
+    glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
     std::ofstream out(path, std::ios::binary);
-    out << "P6\n320 240\n255\n";
-    for (int y = 239; y >= 0; --y)
-        out.write(reinterpret_cast<const char*>(pixels.data() + y * 320 * 3), 320 * 3);
+    out << "P6\n" << width << " " << height << "\n255\n";
+    for (int y = height - 1; y >= 0; --y)
+        out.write(reinterpret_cast<const char*>(pixels.data() + size_t(y) * size_t(width) * 3),
+                  width * 3);
     if (!out)
         fatal("could not write screenshot");
 }
 void close() {
     if (rendering) {
+        presenter.release();
         wglMakeCurrent(nullptr, nullptr);
         wglDeleteContext(rendering);
         rendering = nullptr;
@@ -635,6 +636,7 @@ void close() {
     storage.close();
     profile_handles.clear();
     brightness = 100;
+    dimmed = false;
     save_slots.clear();
     next_file = next_buffer = 1;
     quitting = false;

@@ -24,8 +24,12 @@ Each game's folder has its own README with details on how to build it, how it wa
 ## The Games
 
 An experimental [Phase Windows bring-up target](Phase/README.md) is also available.
-It runs initialization and diagnoses the first unsupported graphics call;
-Phase is not yet playable and is not included in the supported games below.
+It reaches audible gameplay with keyboard controls and persistent profiles/scores,
+but is still a preview rather than one of the supported games below.
+
+Desktop windows can be freely resized or maximized. Shared video presentation
+fits the complete game image into the window and adds black bars where needed,
+preserving the original aspect ratio. See [shared video](common/video.md).
 
 | Folder | Platforms | Game folder |
 |---|---|---|

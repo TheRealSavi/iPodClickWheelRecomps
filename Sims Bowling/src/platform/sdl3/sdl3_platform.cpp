@@ -14,6 +14,7 @@
 //   P                      screenshot  Q  quit
 //   - / =                  step the window through whole multiples; F or F11 full screen
 //
+#include "ipod/platform/sdl3/presentation.h"
 #include "platform/input_bindings.h"
 #include "platform/platform.h"
 #include "platform/sdl3/music_decoder.h"
@@ -400,14 +401,7 @@ public:
         // Typing is how a name gets entered on a machine with a keyboard; spelling a name out
         // on the wheel keys still works.
         SDL_StartTextInput(window_);
-        // The window keeps the screen's shape however it is dragged, so the picture fills it and
-        // there is nothing to letterbox. - and = step it through whole multiples of 320x240.
-        const float shape = static_cast<float>(SCREEN_WIDTH) / static_cast<float>(SCREEN_HEIGHT);
-        SDL_SetWindowAspectRatio(window_, shape, shape);
-        // Locking the shape can leave the window a size of the system's choosing, so ask for the
-        // one that was wanted again afterwards.
-        SDL_SetWindowSize(window_, static_cast<int>(SCREEN_WIDTH) * WINDOW_SCALE,
-                          static_cast<int>(SCREEN_HEIGHT) * WINDOW_SCALE);
+        // Resizing is unrestricted; shared presentation preserves the frame aspect ratio.
 
         // Rebinding writes straight into the table the key handling reads, so saving is all the
         // window asks of us; the frame rate it does not own at all, and only asks us to flip.
@@ -487,11 +481,6 @@ public:
             switch (event.type) {
             case SDL_EVENT_QUIT:
                 input.quit = true;
-                break;
-            case SDL_EVENT_WINDOW_RESIZED:
-                // The shape is SDL's to keep (SDL_SetWindowAspectRatio, above); the whole
-                // multiple, if the player asked for one, is ours.
-                snap_window_to_whole_multiple();
                 break;
             case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
                 // Dragged to another screen, which may refresh at another rate: what a whole
@@ -582,7 +571,7 @@ public:
         // into a small window is 2.67x, which one bilinear tap cannot do honestly.
         int output_width = 0, output_height = 0;
         const bool have_output =
-            SDL_GetCurrentRenderOutputSize(renderer_, &output_width, &output_height);
+            ipod::video::presentation_size(renderer_, &output_width, &output_height);
         const bool reducing =
             have_output && (texture_width_ > output_width || texture_height_ > output_height);
 
@@ -1022,8 +1011,7 @@ private:
     }
 
     // Grow or shrink the window by one whole multiple of the screen, between 1x and MAX_PRESCALE.
-    // Whole multiples are where the picture looks its best whatever the scaling, and the window's
-    // locked shape means the step is the same in both directions.
+    // This explicit shortcut sizes the window; ordinary dragging remains unrestricted.
     void step_window_scale(int by) {
         int width = 0, height = 0;
         SDL_GetWindowSize(window_, &width, &height);
@@ -1034,40 +1022,13 @@ private:
                           static_cast<int>(SCREEN_HEIGHT) * wanted);
     }
 
-    // With "whole multiples" on, the *window* takes a whole multiple of 320x240 rather than the
-    // picture taking one inside a larger window. Same exact pixel blocks, no border.
-    //
-    // Nothing to do in full screen: the size is the display's. And nothing to do while a snap of
-    // our own is still being delivered, or each resize would arrive back here and set the size
-    // again.
-    void snap_window_to_whole_multiple() {
-        if (!settings().pixel_perfect || fullscreen_ || snapping_) {
-            return;
-        }
-        int width = 0, height = 0;
-        SDL_GetWindowSize(window_, &width, &height);
-        const int wanted = std::clamp((width + static_cast<int>(SCREEN_WIDTH) / 2) /
-                                          static_cast<int>(SCREEN_WIDTH),
-                                      1, MAX_PRESCALE);
-        const int snapped_width = static_cast<int>(SCREEN_WIDTH) * wanted;
-        const int snapped_height = static_cast<int>(SCREEN_HEIGHT) * wanted;
-        if (width == snapped_width && height == snapped_height) {
-            return;
-        }
-        snapping_ = true;
-        SDL_SetWindowSize(window_, snapped_width, snapped_height);
-        snapping_ = false;
-    }
-
     void toggle_fullscreen() {
         fullscreen_ = !fullscreen_;
         if (!SDL_SetWindowFullscreen(window_, fullscreen_)) {
             std::fprintf(stderr, "cannot change full screen: %s\n", SDL_GetError());
             fullscreen_ = !fullscreen_;
         }
-        // Which of the two ways "whole multiples" is kept depends on which of these we are in.
         apply_presentation();
-        snap_window_to_whole_multiple();
     }
 
     // How long a frame is meant to take, or 0 when the rate is unlocked and it may take as long
@@ -1103,7 +1064,6 @@ private:
     void set_pixel_perfect(bool pixel_perfect) {
         settings().pixel_perfect = pixel_perfect;
         apply_presentation();
-        snap_window_to_whole_multiple();  // asking for it takes effect now, not on the next drag
         save_settings();
     }
 
@@ -1131,22 +1091,9 @@ private:
     }
 
     void apply_presentation() {
-        // The picture fills the window. The window is locked to the screen's shape, so filling it
-        // costs no distortion and there is nothing left over to letterbox.
-        //
-        // "Whole multiples" used to be enforced *here*, by refusing a fractional size: the picture
-        // took whatever whole multiple fitted and the rest of the window was border, so the margin
-        // grew and shrank as the window was dragged and the game never filled it. It is enforced
-        // on the window instead now — see snap_window_to_whole_multiple — which gets the same
-        // exact pixel blocks with no border at all.
-        //
-        // Full screen is the exception, because there the size is the display's and not ours to
-        // round. That is the one place the old behaviour is still the only way to honour the
-        // setting, and the border there is the display's shape, not a choice.
-        SDL_SetRenderLogicalPresentation(
-            renderer_, static_cast<int>(SCREEN_WIDTH), static_cast<int>(SCREEN_HEIGHT),
-            settings().pixel_perfect && fullscreen_ ? SDL_LOGICAL_PRESENTATION_INTEGER_SCALE
-                                                    : SDL_LOGICAL_PRESENTATION_LETTERBOX);
+        ipod::video::configure_presentation(renderer_, static_cast<int>(SCREEN_WIDTH),
+                                            static_cast<int>(SCREEN_HEIGHT),
+                                            settings().pixel_perfect);
         apply_texture_scale_mode();
     }
 
@@ -1156,7 +1103,7 @@ private:
     // had, and the caller falls back to one plain pass.
     bool update_prescale() {
         int output_width = 0, output_height = 0;
-        if (!SDL_GetCurrentRenderOutputSize(renderer_, &output_width, &output_height)) {
+        if (!ipod::video::presentation_size(renderer_, &output_width, &output_height)) {
             return false;
         }
         // Whole multiples of *what the renderer handed over*, which is 320x240 only at render
@@ -1315,8 +1262,6 @@ private:
     SDL_Texture* reduce_[2] = {nullptr, nullptr};
     std::pair<int, int> reduce_size_[2] = {{0, 0}, {0, 0}};
     bool fullscreen_ = false;
-    // Set while a snap of our own is in flight, so the resize it causes is not snapped again.
-    bool snapping_ = false;
     unsigned paced_rate_;              // the rate L goes back to from unlocked
     SDL_Texture* prescale_ = nullptr;  // Sharp's whole-number intermediate
     int prescale_factor_ = 0;

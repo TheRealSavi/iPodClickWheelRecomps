@@ -25,6 +25,7 @@
 #include "gamedata/install.h"
 #include "gamedata/manifest.h"
 #include "ipod/platform/device.h"
+#include "ipod/platform/sdl3/presentation.h"
 #include "ipod/runtime/fatal.h"
 #include "platform/input_bindings.h"
 #include "platform/paths.h"
@@ -105,7 +106,11 @@ bool trace_audio() {
 // Where that goes. A terminal, everywhere there is one; on Android stderr reaches nobody, so it
 // goes to the log `adb logcat` shows — which is where the message saying there was no decoder
 // had been going nowhere all along.
-void say_audio(const char* format, ...) __attribute__((format(printf, 1, 2)));
+void say_audio(const char* format, ...)
+#if defined(__GNUC__)
+    __attribute__((format(printf, 1, 2)))
+#endif
+    ;
 void say_audio(const char* format, ...) {
     va_list args;
     va_start(args, format);
@@ -466,14 +471,7 @@ public:
 #if !defined(__ANDROID__)
         SDL_StartTextInput(window_);
 #endif
-        // The window keeps the screen's shape however it is dragged, so the picture fills it and
-        // there is nothing to letterbox. - and = step it through whole multiples of 320x240.
-        const float shape = static_cast<float>(SCREEN_WIDTH) / static_cast<float>(SCREEN_HEIGHT);
-        SDL_SetWindowAspectRatio(window_, shape, shape);
-        // Locking the shape can leave the window a size of the system's choosing, so ask for the
-        // one that was wanted again afterwards.
-        SDL_SetWindowSize(window_, static_cast<int>(SCREEN_WIDTH) * WINDOW_SCALE,
-                          static_cast<int>(SCREEN_HEIGHT) * WINDOW_SCALE);
+        // Resizing is unrestricted; shared presentation preserves the frame aspect ratio.
 
         // Rebinding writes straight into the table the key handling reads, so saving is all the
         // window asks of us; the frame rate it does not own at all, and only asks us to flip.
@@ -662,7 +660,7 @@ public:
         // throws the rest away, which costs exactly the fine dark detail.
         int output_width = 0, output_height = 0;
         const bool have_output =
-            SDL_GetCurrentRenderOutputSize(renderer_, &output_width, &output_height);
+            ipod::video::presentation_size(renderer_, &output_width, &output_height);
         const bool reducing =
             have_output && (texture_width_ > output_width || texture_height_ > output_height);
 
@@ -1093,12 +1091,9 @@ private:
     }
 
     void apply_presentation() {
-        // Pixel-perfect refuses fractional sizes outright: the picture is whatever whole multiple
-        // fits and the rest of the window is border. Letterbox fills the window instead.
-        SDL_SetRenderLogicalPresentation(
-            renderer_, static_cast<int>(SCREEN_WIDTH), static_cast<int>(SCREEN_HEIGHT),
-            settings().pixel_perfect ? SDL_LOGICAL_PRESENTATION_INTEGER_SCALE
-                                     : SDL_LOGICAL_PRESENTATION_LETTERBOX);
+        ipod::video::configure_presentation(renderer_, static_cast<int>(SCREEN_WIDTH),
+                                            static_cast<int>(SCREEN_HEIGHT),
+                                            settings().pixel_perfect);
         apply_texture_scale_mode();
     }
 
@@ -1179,7 +1174,7 @@ private:
     // had, and the caller falls back to one plain pass.
     bool update_prescale() {
         int output_width = 0, output_height = 0;
-        if (!SDL_GetCurrentRenderOutputSize(renderer_, &output_width, &output_height)) {
+        if (!ipod::video::presentation_size(renderer_, &output_width, &output_height)) {
             return false;
         }
         // Whole multiples of *what the renderer handed over*, which is 320x240 only at render

@@ -1,14 +1,20 @@
 // Authored service-contract fixtures. No original executable or assets required.
+#define NOMINMAX
 #include "host.h"
 #include "ipod_eapp.h"
 #include "keyboard.h"
 #include "runtime/memory.h"
 
+// clang-format off
+#include <windows.h>
+#include <GL/gl.h>
+// clang-format on
 #include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 
 namespace {
 using namespace ipod;
@@ -309,6 +315,34 @@ int test_host(const std::filesystem::path& assets) {
         require(ld32(destination + 4 * i) == color[i], "presentation altered color");
     call("OpenGLES", 63, {0x2300, 0x2200, destination, 0});
     require(ld32(destination) == 0x1e01, "presentation altered texture mode");
+    // Exercise real drawable resizes in both directions. Python verifies the
+    // captured content bounds, black bars, orientation and interpolation.
+    const auto window = WindowFromDC(wglGetCurrentDC());
+    require(window != nullptr, "current presentation window missing");
+    require((GetWindowLongW(window, GWL_STYLE) & WS_THICKFRAME) != 0,
+            "game window cannot be resized");
+    for (unsigned y = 0; y < 240; ++y)
+        for (unsigned x = 0; x < 320; ++x)
+            st16(buffer + (y * 320 + x) * 2,
+                 y < 120 ? (x < 160 ? 0xf800 : 0x07e0) : (x < 160 ? 0x001f : 0xffff));
+    for (const auto [width, height] : std::array<std::pair<int, int>, 5>{
+             {{960, 540}, {500, 900}, {319, 241}, {160, 120}, {320, 240}}}) {
+        RECT rect{0, 0, width, height};
+        AdjustWindowRect(&rect, DWORD(GetWindowLongW(window, GWL_STYLE)), FALSE);
+        require(SetWindowPos(window, nullptr, 0, 0, rect.right - rect.left, rect.bottom - rect.top,
+                             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) != 0,
+                "test resize failed");
+        call("OpenGLES", 165, {1, 1, 0, 0});
+        phase::host::screenshot(
+            assets / ("resize-" + std::to_string(width) + "x" + std::to_string(height) + ".ppm"));
+    }
+    call("miscTBD", 3, {1, 0, 0, 0});
+    require(call("miscTBD", 2, {}) == 100, "idle dim changed chosen brightness");
+    call("OpenGLES", 165, {1, 1, 0, 0});
+    phase::host::screenshot(assets / "idle-dim.ppm");
+    call("miscTBD", 3, {});
+    call("OpenGLES", 165, {1, 1, 0, 0});
+    phase::host::screenshot(assets / "idle-restored.ppm");
     Cpu cpu{};
     require(!phase::host::service(cpu, "OpenGLES", 129), "unverified GPU upload accepted");
     phase::host::close();

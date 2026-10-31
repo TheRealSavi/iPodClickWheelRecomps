@@ -63,6 +63,7 @@ def main() -> None:
         *[f'"{p}"' for p in sources],
         f'"{PROJECT / "src/main.cpp"}"',
         f'"{PROJECT / "src/host.cpp"}"',
+        f'"{PROJECT.parent / "common/src/ipod/platform/opengl_presenter.cpp"}"',
         f'"{PROJECT / "src/keyboard.cpp"}"',
         f'"{PROJECT / "src/library.cpp"}"',
         f'"{PROJECT / "src/audio.cpp"}"',

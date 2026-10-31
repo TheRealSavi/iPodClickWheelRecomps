@@ -44,6 +44,10 @@ uv run --python 3.12 python Phase/tools/run.py `
 
 Escape or the window's Close button exits. Without `--visible`, rendering uses
 a hidden window, useful for verification. Screenshots are uncompressed PPM files.
+Drag the window edges or maximize it to enlarge the game. Shared GPU presentation
+smoothly scales the native 320×240 frame, preserves its aspect ratio, and fills
+unused space with black bars. Screenshots include the complete resized window's
+client area. See [shared video presentation](../common/video.md).
 The graphical default is 300 frames; `--frames` accepts 1–36,000. This bounded
 preview uses real elapsed time and a 60 Hz callback limit with `--audio`.
 Without that flag it retains silent, deterministic diagnostic behavior.
