@@ -3,7 +3,7 @@
 | What | Where | Licence |
 |---|---|---|
 | The tools | `common/tools/` | MIT (`common/tools/LICENSE`) |
-| Everything else | the six titles, `common/src/`, `common/cmake/` | GPL-3.0-or-later (`LICENSE`) |
+| Everything else | the titles (including experimental Phase), `common/src/`, `common/cmake/` | GPL-3.0-or-later (`LICENSE`) |
 
 Copyright (C) 2026 Brandon Smith. This page and `common/tools/LICENSE` are the only places in the tree that name an author.
 

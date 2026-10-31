@@ -23,6 +23,10 @@ Each game's folder has its own README with details on how to build it, how it wa
 
 ## The Games
 
+An experimental [Phase Windows bring-up target](Phase/README.md) is also available.
+It runs initialization and diagnoses the first unsupported graphics call;
+Phase is not yet playable and is not included in the supported games below.
+
 | Folder | Platforms | Game folder |
 |---|---|---|
 | `Mini Golf` | macOS, Linux, Windows, Switch, Android | `88888` |
