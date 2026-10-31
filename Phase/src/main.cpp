@@ -14,6 +14,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -66,6 +67,7 @@ void trace_entry_report(uint32_t address) {
 
 namespace phase::eapp {
 uint32_t next_arena = ipod::HEAP_BASE + 0x10000;
+std::set<uint32_t> arenas;
 uint32_t clock_microseconds = 0;
 bool graphical = false;
 bool trace_sdk = true;
@@ -86,7 +88,16 @@ void framework_call(Cpu& cpu, const char* framework, unsigned ordinal, void (*ha
         if (!size || uint64_t(next_arena) + size > uint64_t(ipod::HEAP_BASE) + ipod::HEAP_SIZE)
             ipod::fatal("arena request exceeds bounded host heap");
         cpu.r[0] = next_arena;
+        arenas.insert(next_arena);
         next_arena += uint32_t(size);
+        return;
+    }
+    if (std::string(framework) == "MemoryAlloc" && ordinal == 1) {
+        // Native 18026DF4 releases SDK-owned arena bases during destruction.
+        // Backing memory remains in the bounded guest region until process exit.
+        if (cpu.r[0] && !arenas.erase(cpu.r[0]))
+            ipod::fatal("free of unknown SDK arena %08x", cpu.r[0]);
+        cpu.r[0] = 0;
         return;
     }
     // Phase 0x180055d0 reads a single output word; 0x180055e4 compares elapsed
@@ -157,9 +168,13 @@ void dump_state() {
     state << cpu.cpsr() << '\n';
 }
 
+int test_persistence(const std::filesystem::path&, const std::string&);
+
 int main(int argc, char** argv) {
     std::filesystem::path screenshot_path;
     try {
+        if (argc == 4 && std::string(argv[1]) == "--test-persistence")
+            return test_persistence(argv[2], argv[3]);
         if (argc == 3 && std::string(argv[1]) == "--test-library")
             return test_library(argv[2]);
         if (argc == 3 && std::string(argv[1]) == "--test-audio") {
@@ -174,7 +189,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Run tools/run.py --image PATH");
         unsigned frames = 3;
         bool visible = false, sound = false;
-        std::filesystem::path music_root;
+        std::filesystem::path music_root, save_root;
         std::filesystem::path assets;
         std::filesystem::path input_script;
         for (int i = 2; i < argc; ++i) {
@@ -195,6 +210,8 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("missing option value");
             if (option == "--dump-state")
                 dump_directory = argv[++i];
+            else if (option == "--save-dir")
+                save_root = argv[++i];
             else if (option == "--library")
                 music_root = argv[++i];
             else if (option == "--assets")
@@ -210,7 +227,8 @@ int main(int argc, char** argv) {
             } else
                 throw std::runtime_error("unknown option");
         }
-        if (assets.empty() && (visible || sound || !music_root.empty() || !screenshot_path.empty()))
+        if (assets.empty() && (visible || sound || !music_root.empty() || !save_root.empty() ||
+                               !screenshot_path.empty()))
             throw std::runtime_error("graphics, audio, and library options require --assets");
         struct InputStep {
             unsigned frame, scan;
@@ -240,7 +258,7 @@ int main(int argc, char** argv) {
         size_t next_input = 0;
         phase::eapp::realtime = sound;
         if (!assets.empty()) {
-            phase::host::initialize(assets, visible, sound, music_root);
+            phase::host::initialize(assets, visible, sound, music_root, save_root);
             phase::eapp::graphical = true;
         }
         std::ifstream input(argv[1], std::ios::binary);
@@ -285,10 +303,45 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "STAGE frame=%u state=%u\n", frame, ipod::ld8(context));
             phase::game::call_indirect(ipod::ld32(ipod::IMAGE_BASE + 0x24));
             std::fprintf(stderr, "STAGE frame-returned=%u state=%u\n", frame, ipod::ld8(context));
+            if (!save_root.empty() && ipod::ld8(context) == 6)
+                break;
         }
         dump_state();
         if (!screenshot_path.empty())
             phase::host::screenshot(screenshot_path);
+        if (!save_root.empty()) {
+            // Frame reason 5 runs the application's destructor and saves; answer
+            // 6 acknowledges shutdown. Header teardown alone only frees arenas.
+            // Keep ephemeral diagnostics at their historical frame boundary.
+            for (unsigned scan = 0; scan < 128; ++scan)
+                phase::host::key(scan, false);
+            std::fprintf(stderr, "STAGE shutdown\n");
+            for (unsigned step = 0; ipod::ld8(context) != 6; ++step) {
+                if (step == 300)
+                    throw std::runtime_error(
+                        "native shutdown did not complete; save may be incomplete");
+                if (sound)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                ipod::entry_limit = ipod::entries + 1000000;
+                phase::host::begin_frame(context);
+                ipod::st8(context, 5);
+                ipod::st8(context + 0x100, 5);
+                cpu.r[0] = context;
+                cpu.r[1] = context + 0x100;
+                cpu.r[2] = cpu.r[3] = 0;
+                cpu.r[ipod::LR] = ipod::RAM_BASE;
+                phase::eapp::clock_microseconds += 16667;
+                phase::game::call_indirect(ipod::ld32(ipod::IMAGE_BASE + 0x24));
+            }
+            std::fprintf(stderr, "STAGE shutdown-complete\n");
+            ipod::entry_limit = ipod::entries + 1000000;
+            cpu.r[0] = context;
+            cpu.r[1] = context + 0x100;
+            cpu.r[ipod::LR] = ipod::RAM_BASE;
+            std::fprintf(stderr, "STAGE teardown\n");
+            phase::game::call_indirect(ipod::ld32(ipod::IMAGE_BASE + 0x18));
+            std::fprintf(stderr, "STAGE teardown-returned\n");
+        }
         phase::host::close();
         return 0;
     } catch (const std::exception& error) {

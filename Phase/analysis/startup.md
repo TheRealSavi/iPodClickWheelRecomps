@@ -201,9 +201,10 @@ wraparound, reattachment, release, and button/touch separation.
 
 The game creates the profile through `Users[4]`, obtains its ID through
 `Users[8]`, and creates its native save object. The host provides up to five
-session-local profiles with opaque handles, index/ID lookup (`Users[1,2]`), count
+profiles with opaque handles, index/ID lookup (`Users[1,2]`), count
 (`Users[0]`), and name lookup (`Users[5]`). No profile is fabricated to skip the
-name-entry screen. Rename/delete and persistence are not implemented.
+name-entry screen. Rename/delete is not implemented. The later
+[persistence increment](persistence.md) preserves profiles and records across launches.
 
 Save-store ordinals differ from the asynchronous asset-read API:
 
@@ -216,8 +217,9 @@ Save-store ordinals differ from the asynchronous asset-read API:
 
 Four simultaneous save slots and 100 KiB per record bound this preview adapter.
 Records live in a separate memory map and are never written into the asset
-directory. The native game serializes the `default`/`save_1` data; the host does
-not invent their contents. Closing the process discards both profiles and saves.
+directory. The native game serializes `default`, `save_1.dtb`, and
+`save_1_back.dtb`; the host does not invent their contents. Diagnostic sessions
+remain temporary; `--save-dir` commits them to a separate host snapshot.
 Host tests verify profile lookup and save write/close/reopen/readback behavior.
 
 Metadata 45/47/57/61 expose one empty library browser, reset/filter it, and

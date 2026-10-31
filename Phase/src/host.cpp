@@ -7,6 +7,7 @@
 #include "audio.h"
 #include "keyboard.h"
 #include "library.h"
+#include "persistence.h"
 #include "runtime/memory.h"
 #include "runtime/runtime.h"
 
@@ -39,11 +40,9 @@ struct File {
 };
 std::map<uint32_t, File> files;
 uint32_t next_file = 1, next_buffer = 1;
-std::vector<std::string> profiles;
+persistence::Store storage;
 constexpr uint32_t profile_base = 0x11004000;
-// Session-local save records, separate from the read-only asset tree.
-std::map<std::string, std::vector<uint8_t>> saves;
-std::map<uint32_t, std::string> save_slots;
+std::map<uint32_t, persistence::RecordKey> save_slots;
 constexpr uint32_t framebuffer = 0x11010000;
 uint32_t arg(const Cpu& cpu, unsigned index) {
     return index < 4 ? cpu.r[index] : ld32(cpu.r[SP] + 4 * (index - 4));
@@ -122,11 +121,11 @@ void queue(uint32_t request) {
 }
 bool file_service(Cpu& cpu, unsigned ordinal) {
     if (ordinal == 12) {
-        if (cpu.r[0] != 1)
+        if (cpu.r[0] != 1 && cpu.r[0] != 2)
             fatal("unsupported save resource kind");
         const auto name = string_at(cpu.r[1]);
-        if (name.empty() || name.find_first_of("/\\:") != std::string::npos || name == "..")
-            fatal("invalid save name");
+        if (!persistence::valid_name(cpu.r[0], name))
+            fatal("invalid save name: %s", name.c_str());
         uint32_t slot = 0;
         while (save_slots.count(slot))
             ++slot;
@@ -134,7 +133,7 @@ bool file_service(Cpu& cpu, unsigned ordinal) {
             cpu.r[0] = 0x19;
             return true;
         }
-        save_slots[slot] = name;
+        save_slots[slot] = {cpu.r[0], name};
         st32(cpu.r[2], slot);
         cpu.r[0] = 0;
         return true;
@@ -151,14 +150,16 @@ bool file_service(Cpu& cpu, unsigned ordinal) {
                 return true;
             }
             const auto* bytes = guest_pointer(cpu.r[1], cpu.r[2]);
-            saves[found->second] = std::vector<uint8_t>(bytes, bytes + cpu.r[2]);
+            storage.write(found->second.second, std::vector<uint8_t>(bytes, bytes + cpu.r[2]),
+                          found->second.first);
         } else
             save_slots.erase(found);
         cpu.r[0] = 0;
         return true;
     }
     if (ordinal == 0) {
-        const bool saved = cpu.r[0] == 1 && cpu.r[2] == 0;
+        const uint32_t kind = cpu.r[0];
+        const bool saved = (kind == 1 || kind == 2) && cpu.r[2] == 0;
         if (!saved && (cpu.r[0] != 0 || cpu.r[2] != 1))
             fatal("only read-only game assets are supported");
         const uint32_t request = cpu.r[3], object = ld32(request + 0x14);
@@ -166,13 +167,13 @@ bool file_service(Cpu& cpu, unsigned ordinal) {
         File file;
         bool exists = false;
         if (saved) {
-            const auto found = saves.find(name);
-            if (found != saves.end()) {
+            const auto found = storage.state().records.find({kind, name});
+            if (found != storage.state().records.end()) {
                 file.bytes = found->second;
                 exists = true;
             }
         }
-        if (!saved || (!exists && library::mounted())) {
+        if (!saved || (!exists && kind == 1 && library::mounted())) {
             const auto path = saved ? library::data_path(name) : asset_path(name);
             if (std::filesystem::exists(path) &&
                 (!std::filesystem::is_regular_file(path) ||
@@ -373,7 +374,13 @@ bool graphics(Cpu& cpu, unsigned ordinal) {
 }
 }  // namespace
 void initialize(const std::filesystem::path& assets, bool visible, bool sound,
-                const std::filesystem::path& music_root) {
+                const std::filesystem::path& music_root, const std::filesystem::path& save_root) {
+    storage.open(save_root, {assets, music_root});
+    for (size_t i = 0; i < storage.state().profiles.size(); ++i) {
+        const auto& name = storage.state().profiles[i];
+        std::memcpy(guest_pointer(profile_base + uint32_t(i) * 64, 32), name.c_str(),
+                    name.size() + 1);
+    }
     audio::initialize(sound);
     if (!music_root.empty())
         library::open(music_root);
@@ -413,6 +420,16 @@ void initialize(const std::filesystem::path& assets, bool visible, bool sound,
         ShowWindow(window, SW_SHOW);
 }
 bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
+    if (std::strcmp(framework, "DebugUtil") == 0 && ordinal == 4) {
+        // Firmware 082A23F0 -> 082954F4 -> Semihost_DebugVPrintf.
+        // The observed destructor supplies an already formatted literal string.
+        const auto message = string_at(cpu.r[0]);
+        if (message.find('%') != std::string::npos)
+            fatal("unsupported formatted debug message");
+        std::fprintf(stderr, "GAME: %s\n", message.c_str());
+        cpu.r[0] = 0;
+        return true;
+    }
     if (std::strcmp(framework, "Metadata") == 0)
         return library::service(cpu, ordinal);
     if (std::strcmp(framework, "Audio") == 0 || std::strcmp(framework, "SoundEffect") == 0)
@@ -451,27 +468,27 @@ bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
     }
     if (std::strcmp(framework, "Users") == 0) {
         if (ordinal == 0) {
-            cpu.r[0] = uint32_t(profiles.size());
+            cpu.r[0] = uint32_t(storage.state().profiles.size());
             return true;
         }
         if (ordinal == 4) {
             const auto name = string_at(cpu.r[0]);
-            if (name.empty() || name.size() > 31 || profiles.size() >= 5)
+            if (name.empty() || name.size() > 31 || storage.state().profiles.size() >= 5)
                 fatal("invalid preview profile");
-            auto handle = profile_base + uint32_t(profiles.size()) * 64;
-            profiles.push_back(name);
+            auto handle = profile_base + uint32_t(storage.state().profiles.size()) * 64;
+            storage.add_profile(name);
             std::memcpy(guest_pointer(handle, 32), name.c_str(), name.size() + 1);
             cpu.r[0] = handle;
             return true;
         }
         if (ordinal == 1 || ordinal == 2) {
             unsigned index = ordinal == 1 ? cpu.r[0] : cpu.r[0] - 1;
-            cpu.r[0] = index < profiles.size() ? profile_base + index * 64 : 0;
+            cpu.r[0] = index < storage.state().profiles.size() ? profile_base + index * 64 : 0;
             return true;
         }
         const auto handle = cpu.r[0];
         if (handle < profile_base || (handle - profile_base) % 64 ||
-            (handle - profile_base) / 64 >= profiles.size())
+            (handle - profile_base) / 64 >= storage.state().profiles.size())
             fatal("invalid profile handle");
         if (ordinal == 5) {
             cpu.r[0] = handle;
@@ -564,8 +581,7 @@ void close() {
     completions.clear();
     audio::close();
     library::close();
-    profiles.clear();
-    saves.clear();
+    storage.close();
     save_slots.clear();
     next_file = next_buffer = 1;
     quitting = false;

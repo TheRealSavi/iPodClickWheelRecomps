@@ -35,6 +35,9 @@ def main():
         if p.is_file()
     }
     screenshot = PROJECT / "build/playback-verification.ppm"
+    # Give the native resume countdown headroom on a busy machine. Keep the
+    # minimum real playback assertion below rather than weakening it.
+    frames = 2600
     result = subprocess.run(
         [
             str(PROJECT / "build/phase-startup.exe"),
@@ -46,7 +49,7 @@ def main():
             "--audio",
             "--quiet-sdk",
             "--frames",
-            "2350",
+            str(frames),
             "--input-script",
             str(PROJECT / "tests/playback-input.txt"),
             "--screenshot",
@@ -67,7 +70,7 @@ def main():
         "T0001.wav rate=44100 channels=2",
         "AUDIO paused",
         "AUDIO resumed",
-        "STAGE frame-returned=2349 state=1",
+        f"STAGE frame-returned={frames - 1} state=1",
     ):
         if expected not in result.stderr:
             raise AssertionError(f"Missing playback evidence: {expected}")

@@ -5,7 +5,7 @@ input and a local iTunesDB/Phase Library. Its translated ARM code handles the
 menus, chart decoding, difficulty selection, notes, and drawing. A private
 iOpenPod-generated Poppies chart has reached Hard gameplay; pause/resume works
 through the original pause menu. Timing and full-game compatibility still need
-playtesting. Profiles and saves last only for the current process.
+playtesting. Profiles and native save records persist between interactive launches.
 
 The implementation is independent of iOpenPod and the firmware research lab.
 Generation needs only the owner's plaintext Phase executable. Original game
@@ -67,6 +67,35 @@ returns, then the first frame stops at
 `unimplemented OpenGLES[52], lr=180610f8`. **Exit code 2 is an incomplete port,
 not a successful first frame.** Windows shells may display it as failure.
 `Phase/build/startup.json` records the executable's exit status and SDK trace.
+
+## Profiles and scores
+
+Visible launches through `tools/run.py` automatically save to
+`%LOCALAPPDATA%/iPodClickWheelRecomps/Phase`. The local preview launcher uses this
+same directory. Use `--save-dir PATH` for a separate portable save set, or
+`--ephemeral` for a temporary session. Hidden runs and direct diagnostic-executable
+launches remain temporary unless given `--save-dir`.
+
+Profile creation and each native save write are committed immediately. Normal
+closing first asks Phase to save through its original shutdown routine. A crash
+or forced termination can lose changes the game has not submitted yet. Closing
+during a song is not a verified resumable gameplay checkpoint. The host preserves
+the game's serialized
+bytes and stable profile IDs, including its own primary/backup score records.
+No game assets, music, iTunesDB, or Phase charts are modified.
+
+`state.bin` is a checksummed host snapshot; `state.bak` keeps the previous valid
+commit. An unreadable primary is recovered from the backup, with a log message.
+If neither is valid, startup stops without creating a replacement profile.
+One running process may use a save directory at a time. Copy the entire directory
+while Phase is closed to back up or move profiles. Profile rename/delete is not
+yet implemented.
+
+`tests/verify_persistence.py --image PATH --assets PATH` creates a profile in an
+isolated directory and verifies that a second process loads its native save and
+renders the main menu without input. Authored cross-process tests cover record
+bytes, stable IDs, recovery, interrupted staging, write failures, and locking.
+See [persistence evidence](analysis/persistence.md).
 
 ## Keyboard controls
 
@@ -224,12 +253,12 @@ PATH` separately checks decoder/output progress, pause/resume, repeat, and EOF.
 
 ## Remaining limits
 
-Profiles and scores are session-only. The iTunesDB reader supports the ordinary
+The iTunesDB reader supports the ordinary
 uncompressed music/playlist subset, not iTunesCDB, SQLite libraries, or full
 firmware collation. Music decodes into bounded memory before playback (384 MiB
 maximum per track); long-track streaming is future work. Windows audio latency
 has not been calibrated against a physical iPod. Full-song completion, Marathon,
-all menu routes, GPU uploads, teardown, and long-session memory behavior still
+all menu routes, GPU uploads, and long-session memory behavior still
 need coverage. Unknown SDK services continue to stop explicitly.
 
 See [startup evidence](analysis/startup.md) for the native entry contract and the

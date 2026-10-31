@@ -163,6 +163,7 @@ struct QueueItem {
 };
 std::vector<QueueItem> queue;
 uint32_t repeat_mode = 0, volume = 192, current = 0;
+bool shuffle = false;
 bool silent_playing = false, silent_paused = false;
 std::string guest_string(uint32_t p) {
     std::string s;
@@ -218,6 +219,7 @@ void close() {
     }
     enabled = false;
     repeat_mode = 0;
+    shuffle = false;
     volume = 192;
     current = 0;
 }
@@ -314,10 +316,12 @@ bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
         cpu.r[0] = 0;
         return true;
     case 41:
-        cpu.r[0] = enabled ? music.playing() : silent_playing && !silent_paused;
+        // Native 18006D04 maps Audio[41] to repeat 1 and [42] to repeat 2.
+        // Playback status is Audio[33]; these are not playing/paused queries.
+        cpu.r[0] = repeat_mode == 1;
         return true;
     case 42:
-        cpu.r[0] = enabled ? music.paused : silent_paused;
+        cpu.r[0] = repeat_mode == 2;
         return true;
     case 33:
         cpu.r[0] = (enabled ? music.paused : silent_paused)       ? 2
@@ -334,7 +338,15 @@ bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
                 : 0;
         return true;
     case 40:
-        cpu.r[0] = repeat_mode;
+        cpu.r[0] = shuffle;
+        return true;
+    case 3:
+        // 18006EF4 maps a saved shuffle boolean to 1 (on), 2 (off).
+        // Phase queues one selected track, so this only retains the policy.
+        if (index != 1 && index != 2)
+            fatal("unsupported shuffle policy");
+        shuffle = index == 1;
+        cpu.r[0] = 0;
         return true;
     case 1:
         if (index > 2)

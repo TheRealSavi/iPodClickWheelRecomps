@@ -1,5 +1,6 @@
 // Authored service-contract fixtures. No original executable or assets required.
 #include "host.h"
+#include "ipod_eapp.h"
 #include "keyboard.h"
 #include "runtime/memory.h"
 
@@ -45,6 +46,19 @@ void deliver(uint32_t expected = request) {
 }  // namespace
 
 int test_host(const std::filesystem::path& assets) {
+    Cpu allocation{};
+    allocation.r[0] = 32;
+    phase::eapp::framework_call(allocation, "MemoryAlloc", 0, nullptr);
+    const auto arena = allocation.r[0];
+    phase::eapp::framework_call(allocation, "MemoryAlloc", 1, nullptr);
+    allocation.r[0] = arena;
+    bool double_free_denied = false;
+    try {
+        phase::eapp::framework_call(allocation, "MemoryAlloc", 1, nullptr);
+    } catch (const std::exception&) {
+        double_free_denied = true;
+    }
+    require(double_free_denied, "SDK arena double free accepted");
     phase::input::Keyboard keyboard;
     constexpr std::array<unsigned, 8> ring{0x18, 0x19, 0x27, 0x35, 0x34, 0x33, 0x25, 0x17};
     for (unsigned i = 0; i < 8; ++i) {
@@ -111,6 +125,17 @@ int test_host(const std::filesystem::path& assets) {
                 "button identity or edges");
     }
     phase::host::initialize(assets, false);
+    for (uint32_t repeat = 0; repeat <= 2; ++repeat) {
+        call("Audio", 1, {repeat, 0, 0, 0});
+        require(call("Audio", 41, {}) == (repeat == 1) && call("Audio", 42, {}) == (repeat == 2) &&
+                    call("Audio", 33, {}) == 0,
+                "repeat flags confused with playback status");
+    }
+    call("Audio", 3, {1, 0, 0, 0});
+    require(call("Audio", 40, {}) == 1, "shuffle enable/readback");
+    call("Audio", 3, {2, 0, 0, 0});
+    require(call("Audio", 40, {}) == 0, "shuffle restore/readback");
+    call("Audio", 1, {});
     name("fixture.bin");
     fresh_request(1);
     require(call("AsyncFileIO", 0, {0, path, 1, request}) == 1, "open not accepted");
@@ -224,6 +249,20 @@ int test_host(const std::filesystem::path& assets) {
     call("AsyncFileIO", 2, {request, 0, 0, 0});
     deliver();
     require(std::memcmp(guest_pointer(destination, 6), "saved!", 6) == 0, "session save readback");
+    name("en/stats");
+    require(call("AsyncFileIO", 12, {2, path, destination, 0}) == 0, "stats open");
+    auto stats_slot = ld32(destination);
+    std::memcpy(guest_pointer(destination + 16, 5), "stats", 5);
+    call("AsyncFileIO", 16, {stats_slot, destination + 16, 5, 0});
+    call("AsyncFileIO", 14, {stats_slot, 0, 0, 0});
+    fresh_request(1);
+    st32(request + 0x20, destination);
+    st32(request + 0x24, 5);
+    call("AsyncFileIO", 0, {2, path, 0, request});
+    deliver();
+    require(ld32(request + 0x28) == 0 &&
+                std::memcmp(guest_pointer(destination, 5), "stats", 5) == 0,
+            "stats namespace readback");
     require(call("Metadata", 45, {0, 0, 0, 0}) == 0 && call("Metadata", 61, {0, 0, 0, 0}) == 0,
             "empty library contract");
 

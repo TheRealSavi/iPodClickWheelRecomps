@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -18,6 +19,13 @@ def main() -> int:
     parser.add_argument("--audio", action="store_true")
     parser.add_argument("--library", type=Path)
     parser.add_argument("--visible", action="store_true")
+    saves = parser.add_mutually_exclusive_group()
+    saves.add_argument(
+        "--save-dir", type=Path, help="separate local profile/score directory"
+    )
+    saves.add_argument(
+        "--ephemeral", action="store_true", help="discard profiles and scores on exit"
+    )
     parser.add_argument(
         "--quiet-sdk",
         action="store_true",
@@ -35,7 +43,7 @@ def main() -> int:
     if not 1 <= args.frames <= 36000:
         parser.error("frames must be between 1 and 36000")
     if not args.assets and (
-        args.visible or args.screenshot or args.audio or args.library
+        args.visible or args.screenshot or args.audio or args.library or args.save_dir
     ):
         parser.error("graphics, audio, and library options require --assets")
     command = [str(PROJECT / "build/phase-startup.exe"), str(args.image.resolve())]
@@ -50,6 +58,13 @@ def main() -> int:
         command += ["--audio"]
     if args.library:
         command += ["--library", str(args.library.resolve())]
+    if args.visible and not args.ephemeral and args.save_dir is None:
+        local = os.environ.get("LOCALAPPDATA")
+        if not local:
+            parser.error("LOCALAPPDATA unavailable; pass --save-dir or --ephemeral")
+        args.save_dir = Path(local) / "iPodClickWheelRecomps" / "Phase"
+    if args.save_dir:
+        command += ["--save-dir", str(args.save_dir.resolve())]
     if args.visible:
         command += ["--visible"]
     if args.quiet_sdk:

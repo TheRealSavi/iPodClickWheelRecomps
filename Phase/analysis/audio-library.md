@@ -44,7 +44,9 @@ Relevant Windows contracts:
 | Metadata 95/160 | Release Track/playlist descriptor | Firmware `0829F824` / `0829F808`; immutable host handles need no release |
 | Audio 14/16/18/19 | Register, clear, play queue index, stop | Native `18006C40`, `18006D48`, `18006D68`, `18006DF0` |
 | Audio 28/31 | Current queue index / playback position in ms | Native clock `180287C4`, wrappers `18006E58` and `18006CBC` |
-| Audio 20/33/41/42 | Pause toggle / requested state / playing / paused | Native `18006D2C`, `18006D78`, `18006CD4`, `18006D04`; live pause/resume |
+| Audio 20/33 | Pause toggle / playback status | Native `18006D2C`, `18006D78`, `18006CD4`; live pause/resume |
+| Audio 1/41/42 | Set repeat / repeat-mode queries | Native `18006EA8`, `18006D04`; corrected during [persistence work](persistence.md) |
+| Audio 3/40 | Set/read shuffle policy | Native `18006EF4`, `18006E98`; restoration during shutdown |
 | Audio 47/48/49 | Volume, volume scale, set volume | Native `180055A8`, `18005648`; firmware volume getter `08166358` |
 | SoundEffect 7–16/2/5/35 | PCM and voice parameters, play, stop, status | Native setters at `18010CEC`–`18010D34` and play `1800D67C`; matching shared title contracts |
 
