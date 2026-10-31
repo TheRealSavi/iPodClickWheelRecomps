@@ -4,7 +4,9 @@
 #define NOMINMAX
 #include "host.h"
 
+#include "audio.h"
 #include "keyboard.h"
+#include "library.h"
 #include "runtime/memory.h"
 #include "runtime/runtime.h"
 
@@ -37,9 +39,6 @@ struct File {
 };
 std::map<uint32_t, File> files;
 uint32_t next_file = 1, next_buffer = 1;
-uint32_t audio_queue_size = 0;
-bool audio_playing = false;
-std::vector<std::map<unsigned, uint32_t>> voices;
 std::vector<std::string> profiles;
 constexpr uint32_t profile_base = 0x11004000;
 // Session-local save records, separate from the read-only asset tree.
@@ -172,8 +171,9 @@ bool file_service(Cpu& cpu, unsigned ordinal) {
                 file.bytes = found->second;
                 exists = true;
             }
-        } else {
-            const auto path = asset_path(name);
+        }
+        if (!saved || (!exists && library::mounted())) {
+            const auto path = saved ? library::data_path(name) : asset_path(name);
             if (std::filesystem::exists(path) &&
                 (!std::filesystem::is_regular_file(path) ||
                  std::filesystem::file_size(path) > 64 * 1024 * 1024))
@@ -265,6 +265,15 @@ bool graphics(Cpu& cpu, unsigned ordinal) {
     case 18:
         glColor4f(fixed(a(0)), fixed(a(1)), fixed(a(2)), fixed(a(3)));
         break;
+    case 26:  // Delete names from the software renderer's unused buffer namespace.
+        if (cpu.r[0] > 4096)
+            fatal("too many buffer deletions");
+        for (uint32_t i = 0; i < cpu.r[0]; ++i) {
+            const auto id = ld32(cpu.r[1] + i * 4);
+            if (id >= next_buffer)
+                fatal("invalid buffer name");
+        }
+        break;
     case 27:
         if (a(0) > 4096)
             fatal("oversized texture-name request");
@@ -306,6 +315,9 @@ bool graphics(Cpu& cpu, unsigned ordinal) {
     case 71:
         cpu.r[0] = glIsEnabled(a(0));
         return true;
+    case 119:
+        glScissor(int(a(0)), int(a(1)), int(a(2)), int(a(3)));
+        break;
     case 127:
         glTexEnvi(a(0), a(1), a(2));
         break;
@@ -360,7 +372,11 @@ bool graphics(Cpu& cpu, unsigned ordinal) {
     return true;
 }
 }  // namespace
-void initialize(const std::filesystem::path& assets, bool visible) {
+void initialize(const std::filesystem::path& assets, bool visible, bool sound,
+                const std::filesystem::path& music_root) {
+    audio::initialize(sound);
+    if (!music_root.empty())
+        library::open(music_root);
     asset_root = std::filesystem::canonical(assets);
     WNDCLASSW wc{};
     wc.style = CS_OWNDC;
@@ -397,22 +413,10 @@ void initialize(const std::filesystem::path& assets, bool visible) {
         ShowWindow(window, SW_SHOW);
 }
 bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
-    if (std::strcmp(framework, "Metadata") == 0 && ordinal == 45) {
-        cpu.r[0] = 0;
-        return true;
-    }  // one empty library browser
-    if (std::strcmp(framework, "Metadata") == 0 && ordinal == 47) {
-        cpu.r[0] = 0;
-        return true;
-    }  // reset browser
-    if (std::strcmp(framework, "Metadata") == 0 && ordinal == 57) {
-        cpu.r[0] = 0;
-        return true;
-    }  // filter empty browser
-    if (std::strcmp(framework, "Metadata") == 0 && ordinal == 61) {
-        cpu.r[0] = 0;
-        return true;
-    }  // no host playlists connected
+    if (std::strcmp(framework, "Metadata") == 0)
+        return library::service(cpu, ordinal);
+    if (std::strcmp(framework, "Audio") == 0 || std::strcmp(framework, "SoundEffect") == 0)
+        return audio::service(cpu, framework, ordinal);
     // Native 180051f8 clamps this battery-gauge reading to 22 (full).
     if (std::strcmp(framework, "miscTBD") == 0 && ordinal == 6) {
         cpu.r[0] = 22;
@@ -478,33 +482,6 @@ bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
             return true;
         }
     }
-    if (std::strcmp(framework, "SoundEffect") == 0) {
-        // 1800d0c0 forwards this global default to the per-voice rate setter.
-        if (ordinal == 33) {
-            cpu.r[0] = 0x10000;
-            return true;
-        }
-        if (ordinal == 0) {
-            cpu.r[0] = uint32_t(voices.size());
-            voices.emplace_back();
-            return true;
-        }
-        if (cpu.r[0] >= voices.size())
-            fatal("invalid preview voice");
-        if (ordinal == 35) {
-            cpu.r[0] = 0;
-            return true;
-        }  // silent voices finish immediately
-        if (ordinal >= 7 && ordinal <= 18) {
-            voices[cpu.r[0]][ordinal] = cpu.r[1];
-            cpu.r[0] = 0;
-            return true;
-        }
-        if (ordinal == 2 || ordinal == 5) {
-            cpu.r[0] = 0;
-            return true;
-        }  // silent play/stop
-    }
     if (std::strcmp(framework, "miscTBD") == 0 && ordinal == 8) {
         // Firmware 0829f3a4 builds a UTF-8 path into a bounded output buffer.
         const auto path = asset_path(string_at(cpu.r[3])).generic_string();
@@ -518,47 +495,6 @@ bool service(Cpu& cpu, const char* framework, unsigned ordinal) {
         st32(cpu.r[2], uint32_t(path.size()));
         cpu.r[0] = uint32_t(path.size());
         return true;
-    }
-    // Silent preview queue; this does not decode or play audio.
-    if (std::strcmp(framework, "Audio") == 0) {
-        if (ordinal == 40) {
-            cpu.r[0] = 0;
-            return true;
-        }  // silent preview: repeat off
-        if (ordinal == 19 || ordinal == 16) {
-            audio_queue_size = 0;
-            audio_playing = false;
-            cpu.r[0] = 0;
-            return true;
-        }
-        if (ordinal == 29) {
-            cpu.r[0] = audio_queue_size;
-            return true;
-        }
-        if (ordinal == 14) {
-            ++audio_queue_size;
-            cpu.r[0] = 0;
-            return true;
-        }
-        if (ordinal == 18) {
-            if (cpu.r[0] >= audio_queue_size)
-                fatal("invalid preview stream");
-            audio_playing = true;
-            cpu.r[0] = 0;
-            return true;
-        }
-        if (ordinal == 42) {
-            cpu.r[0] = 0;
-            return true;
-        }  // not paused
-        if (ordinal == 41) {
-            cpu.r[0] = audio_playing;
-            return true;
-        }
-        if (ordinal == 1) {
-            cpu.r[0] = 0;
-            return true;
-        }  // repeat mode (silent)
     }
     return false;
 }
@@ -626,13 +562,12 @@ void close() {
     }
     files.clear();
     completions.clear();
-    voices.clear();
+    audio::close();
+    library::close();
     profiles.clear();
     saves.clear();
     save_slots.clear();
     next_file = next_buffer = 1;
-    audio_queue_size = 0;
-    audio_playing = false;
     quitting = false;
     keyboard = {};
 }

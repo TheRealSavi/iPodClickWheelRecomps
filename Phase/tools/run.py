@@ -15,6 +15,8 @@ def main() -> int:
     parser.add_argument("--image", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=15)
     parser.add_argument("--assets", type=Path)
+    parser.add_argument("--audio", action="store_true")
+    parser.add_argument("--library", type=Path)
     parser.add_argument("--visible", action="store_true")
     parser.add_argument(
         "--quiet-sdk",
@@ -32,8 +34,10 @@ def main() -> int:
         parser.error("timeout must be between zero and 600 seconds")
     if not 1 <= args.frames <= 36000:
         parser.error("frames must be between 1 and 36000")
-    if not args.assets and (args.visible or args.screenshot):
-        parser.error("--visible and --screenshot require --assets")
+    if not args.assets and (
+        args.visible or args.screenshot or args.audio or args.library
+    ):
+        parser.error("graphics, audio, and library options require --assets")
     command = [str(PROJECT / "build/phase-startup.exe"), str(args.image.resolve())]
     if args.assets:
         command += [
@@ -42,6 +46,10 @@ def main() -> int:
             "--frames",
             str(args.frames),
         ]
+    if args.audio:
+        command += ["--audio"]
+    if args.library:
+        command += ["--library", str(args.library.resolve())]
     if args.visible:
         command += ["--visible"]
     if args.quiet_sdk:

@@ -1,4 +1,5 @@
 // Bounded Phase startup. Original routines execute unchanged; unknown SDK calls stop.
+#include "audio.h"
 #include "funcs.h"
 #include "host.h"
 #include "instruction-fixtures.h"
@@ -7,6 +8,7 @@
 #include "runtime/runtime.h"
 
 #include <array>
+#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -15,6 +17,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace ipod {
@@ -66,6 +69,8 @@ uint32_t next_arena = ipod::HEAP_BASE + 0x10000;
 uint32_t clock_microseconds = 0;
 bool graphical = false;
 bool trace_sdk = true;
+bool realtime = false;
+const auto clock_epoch = std::chrono::steady_clock::now();
 void framework_call(Cpu& cpu, const char* framework, unsigned ordinal, void (*handler)(Cpu&)) {
     if (trace_sdk)
         std::fprintf(stderr, "SDK %s[%u] lr=%08x r0=%08x r1=%08x r2=%08x r3=%08x\n", framework,
@@ -86,10 +91,15 @@ void framework_call(Cpu& cpu, const char* framework, unsigned ordinal, void (*ha
     }
     // Phase 0x180055d0 reads a single output word; 0x180055e4 compares elapsed
     // readings with 1,000,000. Unlike Vortex, this title uses ordinal 12.
-    // This deterministic diagnostic clock is not an audio playback clock.
+    // Tests keep their deterministic clock. Audible runs use real elapsed time;
+    // Audio[31] separately returns the device's consumed music samples in ms.
     if (std::string(framework) == "miscTBD" && ordinal == 12) {
-        ipod::st32(cpu.r[0], ++clock_microseconds);
-        cpu.r[0] = clock_microseconds;
+        auto now = realtime ? uint32_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                                           std::chrono::steady_clock::now() - clock_epoch)
+                                           .count())
+                            : ++clock_microseconds;
+        ipod::st32(cpu.r[0], now);
+        cpu.r[0] = now;
         return;
     }
     if (graphical && host::service(cpu, framework, ordinal))
@@ -100,6 +110,7 @@ void framework_call(Cpu& cpu, const char* framework, unsigned ordinal, void (*ha
 
 std::filesystem::path dump_directory;
 int test_host(const std::filesystem::path& assets);
+int test_library(const std::filesystem::path& root);
 int test_instructions() {
     using namespace ipod;
     unsigned index, flags;
@@ -149,6 +160,12 @@ void dump_state() {
 int main(int argc, char** argv) {
     std::filesystem::path screenshot_path;
     try {
+        if (argc == 3 && std::string(argv[1]) == "--test-library")
+            return test_library(argv[2]);
+        if (argc == 3 && std::string(argv[1]) == "--test-audio") {
+            phase::audio::test(argv[2]);
+            return 0;
+        }
         if (argc == 2 && std::string(argv[1]) == "--instructions")
             return test_instructions();
         if (argc == 3 && std::string(argv[1]) == "--test-host")
@@ -156,11 +173,16 @@ int main(int argc, char** argv) {
         if (argc < 2)
             throw std::runtime_error("Run tools/run.py --image PATH");
         unsigned frames = 3;
-        bool visible = false;
+        bool visible = false, sound = false;
+        std::filesystem::path music_root;
         std::filesystem::path assets;
         std::filesystem::path input_script;
         for (int i = 2; i < argc; ++i) {
             std::string option = argv[i];
+            if (option == "--audio") {
+                sound = true;
+                continue;
+            }
             if (option == "--visible") {
                 visible = true;
                 continue;
@@ -173,6 +195,8 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("missing option value");
             if (option == "--dump-state")
                 dump_directory = argv[++i];
+            else if (option == "--library")
+                music_root = argv[++i];
             else if (option == "--assets")
                 assets = argv[++i];
             else if (option == "--screenshot")
@@ -186,8 +210,8 @@ int main(int argc, char** argv) {
             } else
                 throw std::runtime_error("unknown option");
         }
-        if (assets.empty() && (visible || !screenshot_path.empty()))
-            throw std::runtime_error("--visible and --screenshot require --assets");
+        if (assets.empty() && (visible || sound || !music_root.empty() || !screenshot_path.empty()))
+            throw std::runtime_error("graphics, audio, and library options require --assets");
         struct InputStep {
             unsigned frame, scan;
             bool down;
@@ -214,8 +238,9 @@ int main(int argc, char** argv) {
             }
         }
         size_t next_input = 0;
+        phase::eapp::realtime = sound;
         if (!assets.empty()) {
-            phase::host::initialize(assets, visible);
+            phase::host::initialize(assets, visible, sound, music_root);
             phase::eapp::graphical = true;
         }
         std::ifstream input(argv[1], std::ios::binary);
@@ -236,7 +261,12 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "STAGE initialized entries=%llu\n", ipod::entries);
         // Header slot 1 is teardown. Slot 4 is the frame callback. Phase reads
         // reason 0 as initial loading and writes its next state into the answer.
+        auto deadline = std::chrono::steady_clock::now();
         for (unsigned frame = 0; frame < frames; ++frame) {
+            if (sound) {
+                deadline += std::chrono::microseconds(16667);
+                std::this_thread::sleep_until(deadline);
+            }
             ipod::entry_limit = ipod::entries + 1000000;
             if (phase::eapp::graphical) {
                 if (!phase::host::pump())

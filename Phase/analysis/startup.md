@@ -2,9 +2,10 @@
 
 Recorded 2026-10-31 for build 3168002, SHA-256
 `35834fede51f170a0b0bda8e380e1c12af0f86ca1a7952e5abfbb24ab4082258`.
-This combines static analysis, native/emulated comparison, and observation of
-the Windows logo/name-entry screens. It is not physical-iPod timing evidence or
-a playable Windows game.
+This records the initial logo/name-entry milestone and its diagnostic contracts.
+The later [audio and library increment](audio-library.md) supersedes the silent
+audio and empty-library limitations below. Neither is physical-iPod timing
+evidence.
 
 ## Entry contract
 

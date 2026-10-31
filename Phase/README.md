@@ -1,10 +1,11 @@
 # Phase: Windows bring-up
 
-Phase now accepts keyboard click-wheel input, completes its original name-entry
-screen, and reaches the **main menu** in a native Windows window. Its translated
-ARM code handles the menus and drawing. This is **not a playable rhythm-game
-port yet**: audio playback and a host music library are not connected. Profiles
-and save records last only for the current process; they are not saved to disk.
+Phase now reaches **audible gameplay on Windows 11**, using keyboard click-wheel
+input and a local iTunesDB/Phase Library. Its translated ARM code handles the
+menus, chart decoding, difficulty selection, notes, and drawing. A private
+iOpenPod-generated Poppies chart has reached Hard gameplay; pause/resume works
+through the original pause menu. Timing and full-game compatibility still need
+playtesting. Profiles and saves last only for the current process.
 
 The implementation is independent of iOpenPod and the firmware research lab.
 Generation needs only the owner's plaintext Phase executable. Original game
@@ -16,9 +17,10 @@ in this repository.
 Requirements: UV, Python 3.12 or newer, and Visual Studio 2022 C++ x64 Build Tools.
 The build script locates MSVC with `vswhere`; `--vcvars PATH` can override it.
 The host uses Windows' built-in OpenGL compatibility renderer and system
-libraries (`opengl32`, `gdi32`, `user32`). No additional runtime dependency is
-required. This preserves the game's own software rasterizer while providing
-the graphics state it queries and a window for its framebuffer.
+libraries. Media Foundation decodes music; XAudio2 mixes it with the game's PCM
+sound effects. No additional C++ runtime package is required. Windows N editions
+need the Media Feature Pack. The shared SDL decoder uses the same Windows codec,
+but this host uses XAudio2 directly to retain its existing Win32 window.
 
 From the repository root, substitute the path to your own decrypted executable:
 
@@ -34,7 +36,8 @@ To show the original startup interface, provide your own Phase asset directory
 ```powershell
 uv run --python 3.12 python Phase/tools/run.py `
   --image C:/private/Phase_3168002.plain.bin `
-  --assets C:/private/Phase-assets --visible --frames 18000 `
+  --assets C:/private/Phase-assets --audio --visible --frames 18000 `
+  --library C:/private/test-ipod `
   --timeout 600 --quiet-sdk `
   --screenshot Phase/build/preview.ppm
 ```
@@ -42,7 +45,8 @@ uv run --python 3.12 python Phase/tools/run.py `
 Escape or the window's Close button exits. Without `--visible`, rendering uses
 a hidden window, useful for verification. Screenshots are uncompressed PPM files.
 The graphical default is 300 frames; `--frames` accepts 1–36,000. This bounded
-preview advances a diagnostic clock and is not paced to real-time audio.
+preview uses real elapsed time and a 60 Hz callback limit with `--audio`.
+Without that flag it retains silent, deterministic diagnostic behavior.
 `--quiet-sdk` suppresses per-service tracing during longer previews; verification
 commands retain it by default.
 
@@ -174,19 +178,60 @@ three frames; the later name-entry/main-menu screens have native-run and visual
 evidence, not a full ARM differential comparison. Neither establishes gameplay
 or timing accuracy against a physical iPod.
 
-## Next increment
+## Prepare a local library with iOpenPod
 
-1. Add isolated host profile and save persistence;
-   never save into the original asset directory.
-2. Implement real audio decoding and playback with a measured playback clock.
-   Replace the silent stream/voice bookkeeping and validate pause/repeat behavior.
-3. Follow with one bundled song, synchronized audio, input judgment, and results;
-   only then use user-song charts for gameplay-quality comparisons.
+`--library` mounts a local test directory read-only. It reads the actual
+`iPod_Control/iTunes/iTunesDB`, music paths from its Track records, and
+`iPod_Control/GameData_RW/1D000/Phase Data/Phase Library`. The original game
+reads each indexed chart by its full 64-bit Track persistent ID.
 
-The short-lived host arena does not reclaim backing blocks. The diagnostic
-clock is not connected to real time or audio. The host does not yet implement
-GPU buffer uploads, all texture services, teardown, or validated gameplay timing.
-These limits are intentional for this milestone, not suitable for gameplay.
+The optional preparation tool runs in an iOpenPod checkout's UV environment.
+It uses iOpenPod's current analyzer and iPodDB's iTunesDB, Phase index, and PHZ
+writers, then reads the resulting database back for validation. The game itself
+has no iOpenPod or Python runtime dependency. FFmpeg is needed for preparation.
+
+Create a private JSON manifest such as:
+
+```json
+[
+  {"source": "C:/private/Music/song.flac"},
+  {"source": "C:/private/Music/another.flac", "offset_s": 60, "length_ms": 90000}
+]
+```
+
+```powershell
+uv run --project C:/path/to/iOpenPod python Phase/tools/prepare_library.py `
+  --manifest C:/private/songs.json --output Phase/build/test-ipod
+```
+
+Output must be a **new local directory**, never a mounted iPod. Source music is
+read only. The tool creates 44.1 kHz stereo WAV copies, real analysis charts, and
+an ordinary playlist named Phase. Excerpts are labeled in the song browser.
+Its optional `--cached-parts` accepts source-hash-bound research NPZ evidence;
+it regenerates the chart using the current algorithm, without downloading a
+separation model. The preparation receipt records audio/chart hashes and counts.
+
+The tested private corpus contains full-length Poppies and 90-second excerpts
+of 505, Clocks, The Red, and ocean eyes. No music is distributed here.
+Use **Quick Spin → Songs → Poppies → Hard** after entering a name.
+W opens the native pause menu; S selects Resume. X remains the iPod Play/Pause
+button; Phase's gameplay pause screen uses Menu.
+
+`tests/verify_playback.py --image PATH --assets PATH --library PATH` replays
+that private corpus through Hard gameplay, pause/resume, measured playback,
+rendered targets, and unchanged mounted files. `phase-startup.exe --test-audio
+PATH` separately checks decoder/output progress, pause/resume, repeat, and EOF.
+
+## Remaining limits
+
+Profiles and scores are session-only. The iTunesDB reader supports the ordinary
+uncompressed music/playlist subset, not iTunesCDB, SQLite libraries, or full
+firmware collation. Music decodes into bounded memory before playback (384 MiB
+maximum per track); long-track streaming is future work. Windows audio latency
+has not been calibrated against a physical iPod. Full-song completion, Marathon,
+all menu routes, GPU uploads, teardown, and long-session memory behavior still
+need coverage. Unknown SDK services continue to stop explicitly.
 
 See [startup evidence](analysis/startup.md) for the native entry contract and the
 verified graphics/file contracts. Licensing follows [the repository split](../LICENSING.md).
+See [audio and library evidence](analysis/audio-library.md) for this increment.
