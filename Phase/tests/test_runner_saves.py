@@ -35,7 +35,21 @@ class RunnerSaves(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 self.assertEqual(run.main(), 0)
+                self.child_options = child.call_args.kwargs
                 return child.call_args.args[0], project
+
+    def test_interactive_launch_has_no_implicit_play_limit(self):
+        command, _ = self.command("--visible", "--audio", "--quiet-sdk")
+        self.assertNotIn("--frames", command)
+        self.assertIsNone(self.child_options["timeout"])
+
+    def test_diagnostic_and_explicit_limits_remain_available(self):
+        command, _ = self.command()
+        self.assertEqual(command[command.index("--frames") + 1], "300")
+        self.assertEqual(self.child_options["timeout"], 15)
+        command, _ = self.command("--visible", "--frames", "120", "--timeout", "30")
+        self.assertEqual(command[command.index("--frames") + 1], "120")
+        self.assertEqual(self.child_options["timeout"], 30)
 
     def test_visible_defaults_to_user_save_directory(self):
         command, project = self.command("--visible")

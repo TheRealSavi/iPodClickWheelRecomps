@@ -188,7 +188,7 @@ int main(int argc, char** argv) {
         if (argc < 2)
             throw std::runtime_error("Run tools/run.py --image PATH");
         unsigned frames = 3;
-        bool visible = false, sound = false;
+        bool visible = false, sound = false, explicit_frame_limit = false;
         std::filesystem::path music_root, save_root;
         std::filesystem::path assets;
         std::filesystem::path input_script;
@@ -221,6 +221,7 @@ int main(int argc, char** argv) {
             else if (option == "--input-script")
                 input_script = argv[++i];
             else if (option == "--frames") {
+                explicit_frame_limit = true;
                 frames = std::stoul(argv[++i]);
                 if (!frames || frames > 36000)
                     throw std::runtime_error("invalid frame limit");
@@ -230,6 +231,8 @@ int main(int argc, char** argv) {
         if (assets.empty() && (visible || sound || !music_root.empty() || !save_root.empty() ||
                                !screenshot_path.empty()))
             throw std::runtime_error("graphics, audio, and library options require --assets");
+        if (visible && !explicit_frame_limit)
+            frames = 0;  // Normal play runs until the player closes the game.
         struct InputStep {
             unsigned frame, scan;
             bool down;
@@ -249,7 +252,7 @@ int main(int argc, char** argv) {
                 unsigned frame, scan, down;
                 std::string extra;
                 if (!(row >> frame >> std::hex >> scan >> std::dec >> down) || (row >> extra) ||
-                    scan >= 128 || down > 1 || frame >= frames ||
+                    scan >= 128 || down > 1 || (frames && frame >= frames) ||
                     (!input_steps.empty() && frame < input_steps.back().frame))
                     throw std::runtime_error("invalid input script row (frame hex-scan 0-or-1)");
                 input_steps.push_back({frame, scan, down != 0});
@@ -280,7 +283,8 @@ int main(int argc, char** argv) {
         // Header slot 1 is teardown. Slot 4 is the frame callback. Phase reads
         // reason 0 as initial loading and writes its next state into the answer.
         auto deadline = std::chrono::steady_clock::now();
-        for (unsigned frame = 0; frame < frames; ++frame) {
+        unsigned completed_frames = 0;
+        for (unsigned frame = 0; !frames || frame < frames; ++frame) {
             if (sound) {
                 deadline += std::chrono::microseconds(16667);
                 std::this_thread::sleep_until(deadline);
@@ -300,12 +304,19 @@ int main(int argc, char** argv) {
             cpu.r[2] = cpu.r[3] = 0;
             cpu.r[ipod::LR] = ipod::RAM_BASE;
             phase::eapp::clock_microseconds += 16667;
-            std::fprintf(stderr, "STAGE frame=%u state=%u\n", frame, ipod::ld8(context));
+            if (frames || phase::eapp::trace_sdk)
+                std::fprintf(stderr, "STAGE frame=%u state=%u\n", frame, ipod::ld8(context));
             phase::game::call_indirect(ipod::ld32(ipod::IMAGE_BASE + 0x24));
-            std::fprintf(stderr, "STAGE frame-returned=%u state=%u\n", frame, ipod::ld8(context));
+            completed_frames = frame + 1;
+            if (frames || phase::eapp::trace_sdk)
+                std::fprintf(stderr, "STAGE frame-returned=%u state=%u\n", frame,
+                             ipod::ld8(context));
             if (!save_root.empty() && ipod::ld8(context) == 6)
                 break;
         }
+        std::fprintf(stderr, "SESSION ended: %s; completed frames=%u\n",
+                     frames && completed_frames == frames ? "requested frame limit" : "player exit",
+                     completed_frames);
         dump_state();
         if (!screenshot_path.empty())
             phase::host::screenshot(screenshot_path);

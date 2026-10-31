@@ -39,9 +39,9 @@ To show the original startup interface, provide your own Phase asset directory
 ```powershell
 uv run --python 3.12 python Phase/tools/run.py `
   --image C:/private/Phase_3168002.plain.bin `
-  --assets C:/private/Phase-assets --audio --visible --frames 18000 `
+  --assets C:/private/Phase-assets --audio --visible `
   --library C:/private/test-ipod `
-  --timeout 600 --quiet-sdk `
+  --quiet-sdk `
   --screenshot Phase/build/preview.ppm
 ```
 
@@ -58,8 +58,10 @@ NVIDIA NIS uses the GPU for edge-aware enlargement and sharpening on Windows
 with Direct3D 11, including the RTX 4070. It is spatial upscaling, not DLSS or AI
 frame generation. Enlarge the window to see its effect; native-size pixels remain
 unchanged. No additional NVIDIA SDK/runtime installation is needed.
-The graphical default is 300 frames; `--frames` accepts 1–36,000. This bounded
-preview uses real elapsed time and a 60 Hz callback limit with `--audio`.
+Visible play runs until you close the game, with no automatic frame or time limit.
+Hidden diagnostic runs default to 300 frames and a 15-second timeout. Explicit
+`--frames` (1–36,000) and `--timeout` (up to 600 seconds) remain available for tests.
+The game uses real elapsed time and a 60 Hz callback limit with `--audio`.
 Without that flag it retains silent, deterministic diagnostic behavior.
 `--quiet-sdk` suppresses per-service tracing during longer previews; verification
 commands retain it by default.
@@ -71,10 +73,12 @@ Both generation and the supported runner require SHA-256:
 ```
 
 Use `run.py`, rather than launching the internal executable directly: the runner
-checks the complete image hash and kills an overlong process after 15 seconds
-by default. `--timeout` accepts up to 600 seconds for interactive previews.
+checks the complete image hash. Normal sessions write diagnostic output to
+`Phase/build/session-*.log`, with a bounded tail in `Phase/build/startup.json`.
 The native diagnostic also bounds function entries and guest memory. A tight
-loop within one function is covered by the runner's external timeout.
+loop within one function is covered by the runner's optional external timeout.
+Forced diagnostic timeouts may interrupt shutdown saves; use Escape or Close
+to finish a normal play session cleanly.
 
 Without `--assets`, the original diagnostic remains available: initialization
 returns, then the first frame stops at
