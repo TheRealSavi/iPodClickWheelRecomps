@@ -123,7 +123,7 @@ int test_host(const std::filesystem::path& assets) {
     sweep.key(0x35, true);
     sweep.advance();
     require((sweep.wheel() & 255) == 252, "wraparound took long route");
-    constexpr std::array<unsigned, 5> button_keys{0x11, 0x1f, 0x1e, 0x20, 0x2d};
+    constexpr std::array<unsigned, 5> button_keys{0x11, 0x1f, 0x20, 0x1e, 0x2d};
     for (unsigned i = 0; i < button_keys.size(); ++i) {
         keyboard.key(button_keys[i], true);
         keyboard.key(button_keys[i], false);
@@ -343,9 +343,9 @@ int test_host(const std::filesystem::path& assets) {
     require(node && ld8(node) == 1 && ld8(node + 1) == 2, "SDL Menu input mapping");
     phase::host::begin_frame(context);
     for (const auto [scan, button] :
-         std::array<std::pair<SDL_Scancode, unsigned>, 5>{{{SDL_SCANCODE_A, 3},
+         std::array<std::pair<SDL_Scancode, unsigned>, 5>{{{SDL_SCANCODE_A, 4},
                                                            {SDL_SCANCODE_S, 2},
-                                                           {SDL_SCANCODE_D, 4},
+                                                           {SDL_SCANCODE_D, 3},
                                                            {SDL_SCANCODE_X, 5},
                                                            {SDL_SCANCODE_RETURN, 2}}}) {
         send_key(scan, true);

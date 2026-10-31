@@ -15,7 +15,7 @@ void Keyboard::key(unsigned scan, bool down) {
         button = 1;
         break;  // W: Menu
     case 0x1e:
-        button = 3;
+        button = 4;
         break;  // A: Previous
     case 0x1f:
         button = 2;
@@ -24,7 +24,7 @@ void Keyboard::key(unsigned scan, bool down) {
         button = 5;
         break;  // X: Play/Pause
     case 0x20:
-        button = 4;
+        button = 3;
         break;  // D: Next
     case 0x1c:
         button = 2;

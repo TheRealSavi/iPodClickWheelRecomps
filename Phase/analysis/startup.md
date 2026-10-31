@@ -174,7 +174,10 @@ these nodes and polls `InputEvents[0]` for the wheel word through its second
 output pointer. Bit 30 denotes contact; the low byte carries the angle.
 `InputEvents[1]` acknowledges a host-owned node without freeing game memory.
 
-Phase button types are Menu 1, Select 2, Previous 3, Next 4, and Play/Pause 5.
+The host uses Menu 1, Select 2, and Play/Pause 5. Horizontal button events are
+mapped to **A → 4** and **D → 3**, corrected after the player reported reversed
+directions in gameplay. The earlier notes labeled 3 as Previous and 4 as Next;
+that assignment produced the reversed keyboard behavior.
 They are bound to W, S (or Enter), A, D, and X respectively. An initial mapping
 copied from another title incorrectly made A open Exit Game. The corrected
 mapping is covered by button-event tests and a native W-to-Exit-Game check.
