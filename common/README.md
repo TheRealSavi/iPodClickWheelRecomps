@@ -21,8 +21,8 @@ The rule for what earns a place in here: if two games differ because of a real, 
 Resizable desktop windows use [shared video presentation](video.md) to preserve
 the frame's aspect ratio with black bars. All seven desktop hosts, including
 Phase, use one SDL presenter with shared Sharp, Nearest, Smooth, NVIDIA NIS,
-and integer scaling options. NIS uses D3D11 compute on Windows, with Sharp fallback
-on other backends.
+RTX Video AI, and integer scaling options. NIS and the optional RTX Video SDK
+integration use D3D11 on Windows, with explicit Sharp fallback when unavailable.
 
 ## Licence
 

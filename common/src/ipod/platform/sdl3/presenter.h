@@ -1,6 +1,7 @@
 #pragma once
 #include "ipod/platform/video_options.h"
 #include "nis.h"
+#include "rtx_video.h"
 
 #include <SDL3/SDL.h>
 
@@ -21,6 +22,7 @@ public:
     void set_options(Options options) { options_ = options; }
     Options options() const { return options_; }
     bool nis_active() const { return nis_active_; }
+    bool rtx_video_active() const { return rtx_video_active_; }
     const char* scaling_description() const;
     // Returns true only when an unmodified, non-repeated F6/F7 changes options.
     bool handle_shortcut(const SDL_Event& event);
@@ -41,6 +43,8 @@ private:
     int width_ = 0, height_ = 0;
     Options options_;
     NisScaler nis_;
+    RtxVideoScaler rtx_video_;
+    bool rtx_video_active_ = false;
     bool nis_active_ = false;
     std::vector<uint8_t> upload_;
 };

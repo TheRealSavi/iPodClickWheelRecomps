@@ -423,18 +423,23 @@ int test_host(const std::filesystem::path& assets) {
             "video options survived restart");
     require(SDL_SetWindowSize(window, 960, 540) && SDL_SyncWindow(window),
             "F6 stress window resize");
-    const std::array<const char*, 4> modes{"Sharp | Integer", "Nearest | Integer",
+    const std::array<const char*, 5> modes{"RTX Video AI", "Sharp | Integer", "Nearest | Integer",
                                            "Smooth | Integer", "NVIDIA NIS | Integer"};
-    for (unsigned cycle = 0; cycle < 40; ++cycle) {
+    for (unsigned cycle = 0; cycle < 50; ++cycle) {
         // Real SDL shortcut -> durable save -> graphics service -> shared GPU
-        // presenter. Exercise every transition, including NIS back to Sharp.
+        // presenter. Exercise every transition, including RTX AI back to Sharp.
         send_key(SDL_SCANCODE_F6, true);
         send_key(SDL_SCANCODE_F6, false);
         require(call("OpenGLES", 165, {1, 1, 0, 0}) == 1, "F6 transition presentation");
         require(std::strstr(SDL_GetWindowTitle(window), modes[cycle % modes.size()]),
-                "F6 transition selected unexpected filter or fell back");
+                "F6 transition selected unexpected filter");
     }
     phase::host::screenshot(assets / "f6-cycling.ppm");
+    send_key(SDL_SCANCODE_F6, true);
+    require(std::strstr(SDL_GetWindowTitle(window), "RTX Video AI"), "select AI for save");
+    phase::host::close();
+    reopen();
+    require(std::strstr(SDL_GetWindowTitle(window), "RTX Video AI"), "AI option survived restart");
     phase::host::close();
     std::puts(
         "PASS: asset IO, queued completions, path containment, integer color, presentation state");

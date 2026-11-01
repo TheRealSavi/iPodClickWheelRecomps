@@ -33,6 +33,7 @@ constexpr ScalingName NAMES[SCALING_COUNT] = {
     {Scaling::Nearest, "nearest"},
     {Scaling::Smooth, "smooth"},
     {Scaling::NvidiaNis, "nvidia-nis"},
+    {Scaling::RtxVideo, "rtx-video"},
 };
 
 // The `format` line's number, or 0 for a file that has none.

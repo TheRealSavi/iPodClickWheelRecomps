@@ -10,8 +10,8 @@ click-wheel input, chart timing, or internal rendering resolution.
 ## Player options
 
 All seven desktop hosts accept **F6** to cycle Sharp → Nearest → Smooth → NVIDIA
-NIS and **F7**
-to toggle integer scaling. Choices persist through each host's settings store.
+NIS → RTX Video AI and **F7** to toggle integer scaling.
+Choices persist through each host's settings store.
 The six existing settings windows offer the same choices. Phase shows the active
 filter and Fit/Integer mode in its title. Repeated or modified shortcuts are ignored.
 
@@ -24,6 +24,12 @@ filter and Fit/Integer mode in its title. Repeated or modified shortcuts are ign
   using SDL's Direct3D 11 backend. Tested on the RTX 4070. It uses the finished
   game frame, so it does not need motion vectors or change gameplay timing.
   This is NVIDIA Image Scaling, not DLSS, AI reconstruction, or frame generation.
+- **RTX Video AI**: NVIDIA RTX Video Super Resolution at Ultra quality, using
+  an RTX GPU's AI inference on the finished frame. Requires the optional SDK
+  build below and a compatible NVIDIA driver. Tested on an RTX 4070 with native
+  320×240 input. It processes the whole image, including text and UI; compare
+  against Sharp to choose the appearance you prefer. This does not generate
+  extra frames or change game logic, input, or audio timing.
 - **Integer scaling**: prefer a whole-number enlargement, leaving more black
   border when necessary. The presenter falls back to fractional fitting when
   the window is smaller than the logical frame; it does not force a larger window.
@@ -47,9 +53,9 @@ alter thin text and pixel art. Compare the modes with F6 at a large window size.
 
 `src/ipod/platform/video_options.h` defines the shared enum, labels, and defaults
 without an SDL dependency. Existing game settings retain their serialized keys.
-The new mode appends an enum value and the `nvidia-nis` key; old selections retain
-their meanings. The NVIDIA shader's MIT license and provenance are in
-`common/third_party/nis`.
+NIS and RTX Video append enum values and the `nvidia-nis` and `rtx-video` keys;
+old selections retain their meanings. The NVIDIA shader's MIT license and
+provenance are in `common/third_party/nis`.
 `src/ipod/platform/sdl3/presenter.{h,cpp}` implements the presenter; CMake exports
 its source through `IPOD_CORE_SDL3_SOURCES`. Phase's Windows build links the same
 source and SDL3 library, and copies the SDL DLL and license beside its executable.
@@ -71,6 +77,50 @@ OpenGL compatibility context only for original SDK state and queries**. That
 context never displays or scales the game. SDL owns the visible window and input;
 the adapter restores the SDK context after presentation and before SDK GL calls.
 Audio remains on XAudio2 and Media Foundation.
+
+### Optional NVIDIA RTX Video SDK
+
+Use the external **RTX Video SDK 1.1.0** from
+[NVIDIA's SDK page](https://developer.nvidia.com/rtx-video-sdk) or its
+[official NGC package](https://catalog.ngc.nvidia.com/orgs/nvidia/multimedia/models/dlpp/1.5/file-browser)
+(`RTX_Video_SDK_v1.1.0.zip`). Extract to a local SDK directory. Its headers,
+libraries, and proprietary runtime are not checked into this repository.
+No SDK is needed for the other filters or for non-Windows builds.
+
+For Phase, build with:
+
+```powershell
+uv run --python 3.12 python Phase/tools/build.py --rtx-video-sdk C:/SDK/RTX-Video
+```
+
+`RTX_VIDEO_SDK` is also accepted as an environment variable by Phase's builder.
+For any of the other six desktop titles, add
+`-DRTX_VIDEO_SDK=C:/SDK/RTX-Video` to its CMake configuration. This path requires
+Windows x64 and MSVC. Shared CMake wiring links NGX and copies `nvngx_vsr.dll`
+and its license beside the executable; Phase's builder does the same.
+The normal release workflows do not enable or package this proprietary SDK.
+See [licensing](../LICENSING.md) before distributing a build that links it.
+
+Enlarge the game window, then press F6 until **RTX Video AI** appears. The
+selection persists. AI initialization is lazy, on the first enlarged frame;
+native-size and reduced frames bypass it. The log confirms actual execution with
+`RTX Video AI: NVIDIA VSR Ultra inference active`. Unsupported renderers, absent
+runtime support, or inference errors fall back to Sharp and log the reason once;
+Phase's title explicitly identifies the fallback. Restart after fixing a runtime
+problem to retry initialization.
+
+The shared implementation uses the SDK's D3D11 VSR API directly, with Ultra
+quality (4); quality 0 is the SDK's non-AI bicubic mode and is not used. Cached
+GPU textures avoid CPU readback during normal presentation. A dedicated D3D11
+context state isolates NGX's graphics and compute bindings from SDL, including
+failure cleanup. Model/cache data uses SDL's user-local `RTXVideo` preference
+directory, outside game assets and profile snapshots.
+
+SDK package SHA-256 used for the local verification:
+
+```text
+abf4f34e2b5a618e355b0d5a0365d8ecc3db4396e756e4c850a867e1ae2ed69e
+```
 
 Phase stores versioned host video options under the `host/video` record in its
 existing atomic save snapshot. Native profile/score formats are unchanged, and
@@ -99,6 +149,15 @@ On Windows a second test uses D3D11 and requires actual NIS dispatch. It checks
 border/content pixels, repeated frames, 4.5× enlargement, native-size bypass,
 and output differing from bilinear interpolation; the software test checks the
 fallback. The tests compile with exceptions and RTTI disabled like the other games.
+
+Configure the same tests with `-DRTX_VIDEO_SDK=C:/SDK/RTX-Video` to add an RTX
+hardware test that requires successful AI inference. It checks colored detail,
+output differing from bilinear scaling, source/output resizes, repeatability,
+integer scaling, native bypass, and sustained presentation. On the RTX 4070,
+320×240 → 1440×1080 Ultra measured about 6.3 ms per frame over 120 presentations,
+including a final GPU readback. This is a presenter benchmark, not full-game FPS
+or an input-latency measurement. The SDK-free build and software backend also
+test the explicit fallback.
 
 Phase's authored host test exercises its actual SDL window and renderer, preserved
 SDK GL state, SDL keyboard delivery, filter shortcuts, options across restarts,

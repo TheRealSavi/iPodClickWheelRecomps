@@ -27,6 +27,14 @@ instructions are in `common/third_party/nis/README.md`. Windows releases carry i
 notice alongside the executable. Other linked dependencies and their notices
 are listed in `common/licenses/README.md`; `common/tools/release.sh` packages them.
 
+The optional RTX Video AI integration accepts an externally installed NVIDIA
+RTX Video SDK. That SDK is proprietary and is not covered by this repository's
+GPL or MIT licenses. Its headers, libraries, runtime, and license are not vendored;
+local opt-in builds copy its runtime and license beside the executable. Normal
+release workflows do not enable it. Distribution of a linked build requires
+separate review of both NVIDIA's terms and the project's GPL obligations; the
+local build option does not establish redistribution compatibility.
+
 ## Applying the notice to a source file
 
 There are no per-file licence headers. The two `LICENSE` files and this page are the statement, which is how the rest of this scene does it and is enough for the licences to apply. If you ever want headers, the line to add is `// SPDX-License-Identifier: GPL-3.0-or-later` (or `MIT` under `common/tools/`), and it wants doing mechanically rather than by hand.

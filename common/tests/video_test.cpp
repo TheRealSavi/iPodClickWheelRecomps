@@ -175,6 +175,88 @@ int main(int argc, char** argv) {
               "native pixels bypass enhancement");
     }
     check(presenter.handle_shortcut(event) &&
+              presenter.options().scaling == ipod::video::Scaling::RtxVideo,
+          "cycle to RTX Video AI");
+    check(SDL_SetWindowSize(window, 960, 540) && SDL_SyncWindow(window), "RTX resize");
+    check(presenter.present(white.data(), 320, 240), "RTX or explicit fallback");
+    if (argc > 2)
+        check(presenter.rtx_video_active(), "RTX inference required by hardware test");
+    if (!gpu)
+        check(!presenter.rtx_video_active(), "software renderer cannot claim AI");
+    auto* rtx_capture = presenter.capture();
+    check(rtx_capture != nullptr, "RTX readback");
+    Uint8 r, g, b, a;
+    check(SDL_ReadSurfacePixel(rtx_capture, 480, 270, &r, &g, &b, &a) && r > 250 && g > 250 &&
+              b > 250,
+          "RTX white content");
+    check(SDL_ReadSurfacePixel(rtx_capture, 10, 270, &r, &g, &b, &a) && !r && !g && !b,
+          "RTX black bars");
+    SDL_DestroySurface(rtx_capture);
+    if (presenter.rtx_video_active()) {
+        std::vector<unsigned char> detail(320 * 240 * 3);
+        for (int y = 0; y < 240; ++y)
+            for (int x = 0; x < 320; ++x) {
+                auto* pixel = detail.data() + (y * 320 + x) * 3;
+                pixel[0] = x > y ? 210 : 40;
+                pixel[1] = static_cast<unsigned char>(y);
+                pixel[2] = ((x / 9 + y / 9) % 2) ? 180 : 80;
+            }
+        const auto capture_detail = [&](int source_height = 240) {
+            check(presenter.present(detail.data(), 320, source_height), "RTX detail presentation");
+            auto* image = presenter.capture();
+            check(image != nullptr, "RTX detail readback");
+            auto* rgb = SDL_ConvertSurface(image, SDL_PIXELFORMAT_RGB24);
+            check(rgb != nullptr, "RTX detail conversion");
+            std::vector<unsigned char> result;
+            for (int y = 0; y < rgb->h; ++y) {
+                auto* row = static_cast<unsigned char*>(rgb->pixels) + y * rgb->pitch;
+                result.insert(result.end(), row, row + rgb->w * 3);
+            }
+            SDL_DestroySurface(rgb);
+            SDL_DestroySurface(image);
+            return result;
+        };
+        // Real GPU inference, GPU->CPU readback and subsequent SDL draws must all
+        // survive output/source changes and switching to an ordinary filter.
+        for (const auto& size :
+             std::array<std::array<int, 2>, 3>{{{960, 540}, {500, 900}, {1920, 1080}}}) {
+            check(SDL_SetWindowSize(window, size[0], size[1]) && SDL_SyncWindow(window),
+                  "RTX detailed resize");
+            for (int h : {120, 240}) {
+                presenter.set_options({ipod::video::Scaling::RtxVideo, false});
+                const auto enhanced = capture_detail(h);
+                check(presenter.rtx_video_active(), "RTX remains active after resize");
+                check(enhanced == capture_detail(h), "RTX deterministic repeated frame");
+                presenter.set_options({ipod::video::Scaling::Smooth, false});
+                check(enhanced != capture_detail(h), "AI differs from bilinear scaling");
+            }
+        }
+        presenter.set_options({ipod::video::Scaling::RtxVideo, false});
+        check(SDL_SetRenderVSync(renderer, 0), "disable test vsync");
+        capture_detail();  // Warm-up, including a GPU readback fence.
+        const auto start = SDL_GetTicksNS();
+        for (int frame = 0; frame < 120; ++frame) {
+            detail[0] = static_cast<unsigned char>(frame);
+            check(presenter.present(detail.data(), 320, 240), "RTX sustained presentation");
+        }
+        capture_detail();  // Complete queued GPU work before measuring elapsed time.
+        std::printf("RTX AI 320x240 -> 1440x1080: %.2f ms/frame (120 frames + final readback)\n",
+                    double(SDL_GetTicksNS() - start) / 1e6 / 120.0);
+        check(presenter.rtx_video_active(), "RTX sustained inference");
+        presenter.set_options({ipod::video::Scaling::RtxVideo, true});
+        capture_detail();
+        check(ipod::video::presentation_size(renderer, &width, &height) && width == 1280 &&
+                  height == 960 && presenter.rtx_video_active(),
+              "RTX integer scaling");
+        check(SDL_SetWindowSize(window, 320, 240) && SDL_SyncWindow(window), "RTX native resize");
+        check(capture_detail() == detail && !presenter.rtx_video_active(), "RTX native bypass");
+        presenter.set_options({ipod::video::Scaling::RtxVideo, false});
+    } else {
+        check(std::string(presenter.scaling_description()).find("Sharp fallback") !=
+                  std::string::npos,
+              "RTX fallback is explicitly labeled");
+    }
+    check(presenter.handle_shortcut(event) &&
               presenter.options().scaling == ipod::video::Scaling::Sharp,
           "cycle back to Sharp");
     event.key.repeat = true;

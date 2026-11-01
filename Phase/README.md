@@ -49,15 +49,25 @@ Escape or the window's Close button exits. Without `--visible`, rendering uses
 a hidden window, useful for verification. Screenshots are uncompressed PPM files.
 Drag the window edges or maximize it to enlarge the game. The shared presenter
 preserves the native 320×240 frame's aspect ratio and fills unused space with
-black bars. **F6** cycles Sharp (default), Nearest, Smooth, and NVIDIA NIS;
-**F7** toggles
-integer scaling. The title shows the current choices, which save with your local
+black bars. **F6** cycles Sharp (default), Nearest, Smooth, NVIDIA NIS, and
+RTX Video AI; **F7** toggles integer scaling.
+The title shows the current choices, which save with your local
 profiles between launches. Screenshots include the complete resized client area.
 See [shared video presentation](../common/video.md).
 NVIDIA NIS uses the GPU for edge-aware enlargement and sharpening on Windows
 with Direct3D 11, including the RTX 4070. It is spatial upscaling, not DLSS or AI
 frame generation. Enlarge the window to see its effect; native-size pixels remain
 unchanged. No additional NVIDIA SDK/runtime installation is needed.
+
+**RTX Video AI** adds real NVIDIA AI super resolution at Ultra quality on a
+compatible RTX GPU, including the RTX 4070. Enable it at build time with
+`uv run --python 3.12 python Phase/tools/build.py --rtx-video-sdk C:/SDK/RTX-Video`.
+The [shared setup instructions](../common/video.md#optional-nvidia-rtx-video-sdk)
+cover the external SDK and verification. Builds without it show **Sharp fallback**
+when this mode is selected. Enlarge the window to activate AI processing; the
+log confirms actual inference. This uses the same implementation as all six
+other desktop games.
+
 Visible play runs until you close the game, with no automatic frame or time limit.
 Hidden diagnostic runs default to 300 frames and a 15-second timeout. Explicit
 `--frames` (1–36,000) and `--timeout` (up to 600 seconds) remain available for tests.

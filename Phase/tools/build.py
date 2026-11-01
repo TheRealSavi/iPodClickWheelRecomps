@@ -16,6 +16,14 @@ def main() -> None:
         "--vcvars", type=Path, help="explicit vcvars64.bat; otherwise use vswhere"
     )
     parser.add_argument(
+        "--rtx-video-sdk",
+        type=Path,
+        default=Path(os.environ["RTX_VIDEO_SDK"])
+        if os.environ.get("RTX_VIDEO_SDK")
+        else None,
+        help="optional external NVIDIA RTX Video SDK root for AI upscaling",
+    )
+    parser.add_argument(
         "--sdl-root",
         type=Path,
         default=Path(os.environ.get("SDL3_ROOT", PROJECT / "build/deps/SDL3-3.4.16")),
@@ -84,6 +92,7 @@ def main() -> None:
         f'"{PROJECT / "src/host.cpp"}"',
         f'"{PROJECT.parent / "common/src/ipod/platform/sdl3/presenter.cpp"}"',
         f'"{PROJECT.parent / "common/src/ipod/platform/sdl3/nis.cpp"}"',
+        f'"{PROJECT.parent / "common/src/ipod/platform/sdl3/rtx_video.cpp"}"',
         f'"{PROJECT / "src/keyboard.cpp"}"',
         f'"{PROJECT / "src/library.cpp"}"',
         f'"{PROJECT / "src/audio.cpp"}"',
@@ -103,6 +112,26 @@ def main() -> None:
         "/Fe:phase-startup.exe",
         "/Fo:obj\\",
     ]
+    if args.rtx_video_sdk:
+        rtx = args.rtx_video_sdk.resolve()
+        for relative in (
+            "include/nvsdk_ngx_helpers_vsr.h",
+            "lib/Windows/x64/nvsdk_ngx_s.lib",
+            "bin/Windows/x64/rel/nvngx_vsr.dll",
+            "NVIDIA_RTX_Video_SDK_License.pdf",
+        ):
+            if not (rtx / relative).is_file():
+                raise SystemExit(f"Missing RTX Video SDK file: {rtx / relative}")
+        arguments.extend(
+            [
+                "/DIPOD_HAS_RTX_VIDEO=1",
+                f'/I"{rtx / "include"}"',
+                f'"{rtx / "lib/Windows/x64/nvsdk_ngx_s.lib"}"',
+                "advapi32.lib",
+            ]
+        )
+        shutil.copy2(rtx / "bin/Windows/x64/rel/nvngx_vsr.dll", build)
+        shutil.copy2(rtx / "NVIDIA_RTX_Video_SDK_License.pdf", build)
     (build / "compile.rsp").write_text("\n".join(arguments) + "\n")
     # These are local tool paths, never input read from the game.
     if any(c in str(vcvars) for c in '\r\n%"'):

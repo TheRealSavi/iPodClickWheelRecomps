@@ -8,6 +8,7 @@
 # directory, and the headless oracle target has no SDL at all. It is published as a list instead,
 # and each title compiles it into its own SDL executable alongside its own `platform/sdl3/`.
 set(IPOD_CORE_SDL3_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ipod/platform/sdl3/rtx_video.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ipod/platform/sdl3/nis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ipod/platform/sdl3/presenter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ipod/platform/sdl3/music_decoder.cpp
@@ -25,6 +26,8 @@ add_library(ipod_core STATIC
     src/ipod/gamedata/zip.cpp
 )
 target_include_directories(ipod_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/RtxVideo.cmake)
+target_link_libraries(ipod_core PUBLIC ipod_rtx_video)
 
 # One rounding, on every machine.
 #

@@ -13,6 +13,8 @@ void Presenter::attach(SDL_Renderer* renderer, int width, int height) {
     logical_height_ = height;
 }
 void Presenter::reset() {
+    rtx_video_.reset();
+    rtx_video_active_ = false;
     nis_.reset();
     nis_active_ = false;
     if (frame_)
@@ -30,6 +32,8 @@ void Presenter::reset() {
     upload_.clear();
 }
 const char* Presenter::scaling_description() const {
+    if (options_.scaling == Scaling::RtxVideo && !rtx_video_.available(renderer_))
+        return "RTX Video AI (Sharp fallback)";
     if (options_.scaling == Scaling::NvidiaNis && !nis_.available(renderer_))
         return "NVIDIA NIS (Sharp fallback)";
     return scaling_label(options_.scaling);
@@ -86,6 +90,7 @@ bool Presenter::present(const uint8_t* rgb, unsigned width, unsigned height) {
            SDL_RenderPresent(renderer_);
 }
 bool Presenter::render_last() {
+    rtx_video_active_ = false;
     nis_active_ = false;
     if (!renderer_ || !frame_ || logical_width_ <= 0 || logical_height_ <= 0)
         return SDL_SetError("No video frame available");
@@ -125,8 +130,17 @@ bool Presenter::render_last() {
                 nis_active_ = true;
             }
         }
+        if (options_.scaling == Scaling::RtxVideo &&
+            (output_width > width_ || output_height > height_)) {
+            if (auto* enhanced =
+                    rtx_video_.upscale(renderer_, frame_, output_width, output_height)) {
+                source = enhanced;
+                rtx_video_active_ = true;
+            }
+        }
         if (options_.scaling == Scaling::Sharp ||
-            (options_.scaling == Scaling::NvidiaNis && !nis_active_)) {
+            (options_.scaling == Scaling::NvidiaNis && !nis_active_) ||
+            (options_.scaling == Scaling::RtxVideo && !rtx_video_active_)) {
             const int factor = std::clamp(std::max((output_width + width_ - 1) / width_,
                                                    (output_height + height_ - 1) / height_),
                                           1, 8);
