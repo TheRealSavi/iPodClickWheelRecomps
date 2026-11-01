@@ -23,6 +23,11 @@ Each game's folder has its own README with details on how to build it, how it wa
 
 ## The Games
 
+On Windows, double-click **[Launch Games.cmd](Launch%20Games.cmd)** for a small
+launcher with all seven games and saved launch options. Select a game and click
+**Play**, or double-click its name. It uses UV and Python's built-in desktop UI;
+no extra Python packages are needed. See [launcher setup](common/launcher.md).
+
 An experimental [Phase Windows bring-up target](Phase/README.md) is also available.
 It reaches audible gameplay with keyboard controls and persistent profiles/scores,
 but is still a preview rather than one of the supported games below.

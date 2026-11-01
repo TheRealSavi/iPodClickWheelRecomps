@@ -54,18 +54,22 @@ class FunctionEmitter:
     """Emits one function. Create a new one per function; it holds no state across functions."""
 
     def __init__(
-        self, body: FunctionBody, function: Function, image: EAppImage, table: dict[int, Function]
+        self, body: FunctionBody, function: Function, image: EAppImage, table: dict[int, Function],
+        entry_hook: str = "",
     ) -> None:
         self.body = body
         self.function = function
         self.image = image
         self.table = table
+        self.entry_hook = entry_hook
 
     # -- top level -------------------------------------------------------------------------
 
     def emit(self) -> str:
         lines = [self._header(), f"void {function_symbol(self.function)}(Cpu& cpu) {{"]
         lines.append(f"{INDENT}trace_entry({hex_u32(self.body.entry)});")
+        if self.entry_hook:
+            lines.append(f"{INDENT}{self.entry_hook}")
         ordered = self.body.ordered()
         labels = set(self.body.labels)
         # Instructions are emitted in address order and fall through to each other as on the

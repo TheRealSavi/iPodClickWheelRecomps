@@ -5,6 +5,7 @@
 #include "host.h"
 
 #include "audio.h"
+#include "hd_renderer.h"
 #include "ipod/platform/sdl3/presenter.h"
 #include "keyboard.h"
 #include "library.h"
@@ -87,9 +88,11 @@ uint32_t expose_profile(const persistence::Profile& profile) {
 }
 void video_title() {
     const auto options = presenter.options();
-    const std::string title = std::string("Phase - ") + presenter.scaling_description() +
-                              (options.pixel_perfect ? " | Integer" : " | Fit") +
-                              " | F6: filter, F7: integer scaling";
+    const std::string title =
+        std::string("Phase - ") + presenter.scaling_description() +
+        (options.pixel_perfect ? " | Integer" : " | Fit") +
+        (hd::scale() > 1 ? " | HD " + std::to_string(hd::scale()) + "x" : "") +
+        " | F6: filter, F7: integer scaling";
     SDL_SetWindowTitle(display_window, title.c_str());
 }
 unsigned physical_scan(SDL_Scancode scan) {
@@ -309,6 +312,7 @@ bool graphics(Cpu& cpu, unsigned ordinal) {
         break;
     case 18:
         glColor4f(fixed(a(0)), fixed(a(1)), fixed(a(2)), fixed(a(3)));
+        hd::set_color(fixed(a(0)), fixed(a(1)), fixed(a(2)), fixed(a(3)));
         break;
     case 26:  // Delete names from the software renderer's unused buffer namespace.
         if (cpu.r[0] > 4096)
@@ -376,20 +380,26 @@ bool graphics(Cpu& cpu, unsigned ordinal) {
         glFinish();
         break;
     case 165: {
-        std::vector<uint8_t> rgb(320 * 240 * 3);
-        for (unsigned i = 0; i < 320 * 240; ++i) {
+        const auto scale = 20 + (dimmed ? std::min(brightness, 20u) : brightness) * 80 / 100;
+        const auto previous_render_scale = hd::scale();
+        auto* hd_frame = hd::finish(scale);
+        std::vector<uint8_t> rgb;
+        if (!hd_frame)
+            rgb.resize(320 * 240 * 3);
+        for (unsigned i = 0; !hd_frame && i < 320 * 240; ++i) {
             auto p = ld16(framebuffer + i * 2);
             // Keep zero readable like an LCD at minimum backlight. This is a
             // host presentation curve, not a claim about physical iPod luminance.
-            const auto scale = 20 + (dimmed ? std::min(brightness, 20u) : brightness) * 80 / 100;
             rgb[i * 3] = uint8_t((p >> 11) * 255 / 31 * scale / 100);
             rgb[i * 3 + 1] = uint8_t(((p >> 5) & 63) * 255 / 63 * scale / 100);
             rgb[i * 3 + 2] = uint8_t((p & 31) * 255 / 31 * scale / 100);
         }
         const auto* previous_scaling = presenter.scaling_description();
-        if (!presenter.present(rgb.data(), 320, 240))
+        if (!(hd_frame ? presenter.present_texture(hd_frame)
+                       : presenter.present(rgb.data(), 320, 240)))
             fatal("Video presentation failed: %s", SDL_GetError());
-        if (std::strcmp(previous_scaling, presenter.scaling_description()) != 0)
+        if (std::strcmp(previous_scaling, presenter.scaling_description()) != 0 ||
+            previous_render_scale != hd::scale())
             video_title();
         if (!wglMakeCurrent(dc, rendering))
             fatal("OpenGL compatibility context restore failed");
@@ -404,7 +414,8 @@ bool graphics(Cpu& cpu, unsigned ordinal) {
 }
 }  // namespace
 void initialize(const std::filesystem::path& assets, bool visible, bool sound,
-                const std::filesystem::path& music_root, const std::filesystem::path& save_root) {
+                const std::filesystem::path& music_root, const std::filesystem::path& save_root,
+                unsigned render_scale) {
     storage.open(save_root, {assets, music_root});
     for (const auto& profile : storage.state().profiles)
         expose_profile(profile);
@@ -419,6 +430,7 @@ void initialize(const std::filesystem::path& assets, bool visible, bool sound,
                                      &display_window, &display_renderer))
         fatal("SDL window unavailable: %s", SDL_GetError());
     presenter.attach(display_renderer, 320, 240);
+    hd::configure(display_renderer, render_scale);
     ipod::video::Options options;
     const auto saved = storage.state().records.find({2, "host/video"});
     if (saved != storage.state().records.end()) {
@@ -685,6 +697,7 @@ void screenshot(const std::filesystem::path& path) {
 }
 void close() {
     presenter.reset();
+    hd::reset();
     SDL_DestroyRenderer(display_renderer);
     display_renderer = nullptr;
     SDL_DestroyWindow(display_window);

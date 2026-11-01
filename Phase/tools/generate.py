@@ -8,11 +8,25 @@ from pathlib import Path
 from image_contract import IMAGE_SHA256, checked_image
 
 PROJECT = Path(__file__).resolve().parents[1]
+HD_HOOKS = {0x1801425C: "::phase::hd::TriangleScope hd_triangle(cpu);"}
+HD_HOOKS.update(
+    {
+        address: f"::phase::hd::BlitScope hd_blit(cpu, 0x{address:08x});"
+        for address in (
+            0x18011944,
+            0x180146F8,
+            0x18014A2C,
+            0x18014D08,
+            0x1801EF00,
+            0x1801968C,
+        )
+    }
+)
 sys.path.insert(0, str(PROJECT.parent / "common/tools"))
+from discovery import pc_relative_code_addresses, stored_function_pointers
 from recomp.functions import GhidraEntry, Kind, build_function_table
 from recomp.generate import Bindings, Generator
 from recomp.image import EAppImage
-from discovery import pc_relative_code_addresses, stored_function_pointers
 
 
 def constructor_entries(image: EAppImage) -> set[int]:
@@ -41,7 +55,7 @@ def main() -> None:
     survey = []
     if args.functions:
         for row in args.functions.read_text().splitlines():
-            address, name, size = row.split("\t")
+            address, _name, size = row.split("\t")
             survey.append(GhidraEntry(int(address, 16), int(size), 0))
     # No game routines are replaced. Missing platform services stop in the host.
     bindings = Bindings()
@@ -53,7 +67,13 @@ def main() -> None:
         image, survey, set(args.extra_entry) | constructors, image.end, set()
     )
     generator = Generator(
-        image, functions, bindings, set(), "Phase build 3168002", namespace="phase"
+        image,
+        functions,
+        bindings,
+        set(),
+        "Phase build 3168002",
+        namespace="phase",
+        entry_hooks=HD_HOOKS,
     )
     generator.discover_all()
     known = {f.entry for f in generator.table.values() if f.kind is not Kind.THUNK}
@@ -63,7 +83,13 @@ def main() -> None:
         image, survey, known | stored | formed, image.end, set()
     )
     generator = Generator(
-        image, functions, bindings, set(), "Phase build 3168002", namespace="phase"
+        image,
+        functions,
+        bindings,
+        set(),
+        "Phase build 3168002",
+        namespace="phase",
+        entry_hooks=HD_HOOKS,
     )
     generator.discover_all()
     output = PROJECT / "gen"
@@ -78,6 +104,7 @@ def main() -> None:
         "pc_relative_entries": len(formed),
         "frameworks": {f.name: len(f.thunks) for f in image.frameworks},
         "runtime_replacements": [],
+        "render_observers": [f"0x{address:08x}" for address in HD_HOOKS],
     }
     (output / "generation.json").write_text(json.dumps(receipt, indent=2) + "\n")
     print(json.dumps(receipt, indent=2))

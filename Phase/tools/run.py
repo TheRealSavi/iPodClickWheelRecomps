@@ -22,6 +22,13 @@ def main() -> int:
     parser.add_argument("--audio", action="store_true")
     parser.add_argument("--library", type=Path)
     parser.add_argument("--visible", action="store_true")
+    parser.add_argument(
+        "--render-scale",
+        type=int,
+        choices=range(1, 5),
+        default=1,
+        help="internal drawing scale: 1 original, 2–4 experimental HD",
+    )
     saves = parser.add_mutually_exclusive_group()
     saves.add_argument(
         "--save-dir", type=Path, help="separate local profile/score directory"
@@ -50,7 +57,12 @@ def main() -> int:
     if frames is not None and not 1 <= frames <= 36000:
         parser.error("frames must be between 1 and 36000")
     if not args.assets and (
-        args.visible or args.screenshot or args.audio or args.library or args.save_dir
+        args.visible
+        or args.screenshot
+        or args.audio
+        or args.library
+        or args.save_dir
+        or args.render_scale != 1
     ):
         parser.error("graphics, audio, and library options require --assets")
     command = [str(PROJECT / "build/phase-startup.exe"), str(args.image.resolve())]
@@ -58,6 +70,8 @@ def main() -> int:
         command += [
             "--assets",
             str(args.assets.resolve()),
+            "--render-scale",
+            str(args.render_scale),
         ]
         if frames is not None:
             command += ["--frames", str(frames)]

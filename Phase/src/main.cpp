@@ -188,6 +188,7 @@ int main(int argc, char** argv) {
         if (argc < 2)
             throw std::runtime_error("Run tools/run.py --image PATH");
         unsigned frames = 3;
+        unsigned render_scale = 1;
         bool visible = false, sound = false, explicit_frame_limit = false;
         std::filesystem::path music_root, save_root;
         std::filesystem::path assets;
@@ -220,7 +221,12 @@ int main(int argc, char** argv) {
                 screenshot_path = argv[++i];
             else if (option == "--input-script")
                 input_script = argv[++i];
-            else if (option == "--frames") {
+            else if (option == "--render-scale") {
+                const std::string value = argv[++i];
+                if (value.size() != 1 || value[0] < '1' || value[0] > '4')
+                    throw std::runtime_error("render scale must be 1 through 4");
+                render_scale = unsigned(value[0] - '0');
+            } else if (option == "--frames") {
                 explicit_frame_limit = true;
                 frames = std::stoul(argv[++i]);
                 if (!frames || frames > 36000)
@@ -229,7 +235,7 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("unknown option");
         }
         if (assets.empty() && (visible || sound || !music_root.empty() || !save_root.empty() ||
-                               !screenshot_path.empty()))
+                               !screenshot_path.empty() || render_scale != 1))
             throw std::runtime_error("graphics, audio, and library options require --assets");
         if (visible && !explicit_frame_limit)
             frames = 0;  // Normal play runs until the player closes the game.
@@ -261,7 +267,7 @@ int main(int argc, char** argv) {
         size_t next_input = 0;
         phase::eapp::realtime = sound;
         if (!assets.empty()) {
-            phase::host::initialize(assets, visible, sound, music_root, save_root);
+            phase::host::initialize(assets, visible, sound, music_root, save_root, render_scale);
             phase::eapp::graphical = true;
         }
         std::ifstream input(argv[1], std::ios::binary);

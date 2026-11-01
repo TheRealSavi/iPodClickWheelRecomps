@@ -93,12 +93,14 @@ class Generator:
         replaced: set[int],
         banner: str,
         namespace: str,
+        entry_hooks: dict[int, str] | None = None,
     ) -> None:
         # The C++ namespace the recompiled bodies are emitted into, without the `::game` — one of
         # the two things this package cannot know about the title it is recompiling. The other is
         # which functions are runtime rather than game, which `functions.build_function_table`
         # takes as a set for the same reason.
         self.namespace = namespace
+        self.entry_hooks = entry_hooks or {}
         self.image = image
         self.table: dict[int, Function] = {f.entry: f for f in functions}
         self.bindings = bindings
@@ -227,7 +229,8 @@ class Generator:
             ]
             for function in chunk:
                 body = self.bodies[function.entry]
-                parts.append(FunctionEmitter(body, function, self.image, self.table).emit())
+                parts.append(FunctionEmitter(body, function, self.image, self.table,
+                                             self.entry_hooks.get(function.entry, "")).emit())
                 self.report.emitted += 1
                 self.report.instructions += len(body.instructions)
             parts.append(f"}}  // namespace {self.namespace}::game")

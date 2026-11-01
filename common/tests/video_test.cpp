@@ -269,7 +269,34 @@ int main(int argc, char** argv) {
     check(presenter.handle_shortcut(event) && presenter.options().pixel_perfect,
           "toggle integer scaling");
     check(!presenter.present(nullptr, 0, 0), "reject invalid frame");
+    // Borrowed GPU frames use the same fitting/capture path as CPU uploads.
+    presenter.set_options({ipod::video::Scaling::Nearest, false});
+    check(SDL_SetWindowSize(window, 960, 540) && SDL_SyncWindow(window), "borrowed resize");
+    auto* borrowed =
+        SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, 1280, 960);
+    check(borrowed && SDL_SetRenderTarget(renderer, borrowed), "borrowed target");
+    check(SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255) && SDL_RenderClear(renderer),
+          "red GPU frame");
+    check(presenter.present_texture(borrowed), "borrow GPU frame");
+    auto* borrowed_pixels = presenter.capture();
+    check(borrowed_pixels && SDL_ReadSurfacePixel(borrowed_pixels, 480, 270, &r, &g, &b, &a) &&
+              r == 255 && !g && !b,
+          "capture redraws borrowed GPU texture");
+    check(SDL_ReadSurfacePixel(borrowed_pixels, 10, 270, &r, &g, &b, &a) && !r && !g && !b,
+          "GPU texture retains black bars");
+    SDL_DestroySurface(borrowed_pixels);
+    check(!presenter.present_texture(nullptr), "reject null borrowed texture");
+    check(presenter.present(white.data(), 320, 240), "return to cached CPU upload");
+    borrowed_pixels = presenter.capture();
+    check(borrowed_pixels && SDL_ReadSurfacePixel(borrowed_pixels, 480, 270, &r, &g, &b, &a) &&
+              r == 255 && g == 255 && b == 255,
+          "CPU upload replaces borrowed frame");
+    SDL_DestroySurface(borrowed_pixels);
+    check(presenter.present_texture(borrowed), "reuse borrowed frame");
     presenter.reset();
+    check(SDL_GetRendererFromTexture(borrowed) == renderer,
+          "reset does not destroy borrowed texture");
+    SDL_DestroyTexture(borrowed);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();

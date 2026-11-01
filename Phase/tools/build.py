@@ -90,6 +90,7 @@ def main() -> None:
         *[f'"{p}"' for p in sources],
         f'"{PROJECT / "src/main.cpp"}"',
         f'"{PROJECT / "src/host.cpp"}"',
+        f'"{PROJECT / "src/hd_renderer.cpp"}"',
         f'"{PROJECT.parent / "common/src/ipod/platform/sdl3/presenter.cpp"}"',
         f'"{PROJECT.parent / "common/src/ipod/platform/sdl3/nis.cpp"}"',
         f'"{PROJECT.parent / "common/src/ipod/platform/sdl3/rtx_video.cpp"}"',

@@ -9,8 +9,8 @@
 #include <vector>
 
 namespace ipod::video {
-// Owns all frame textures, but not the renderer. Reset before destroying the
-// renderer. Use on its main thread, with a renderer dedicated to this presenter.
+// Owns uploaded frame textures, but not borrowed textures or the renderer. Reset before destroying
+// the renderer. Use on its main thread, with a renderer dedicated to this presenter.
 class Presenter {
 public:
     Presenter() = default;
@@ -27,6 +27,9 @@ public:
     // Returns true only when an unmodified, non-repeated F6/F7 changes options.
     bool handle_shortcut(const SDL_Event& event);
     bool present(const uint8_t* rgb, unsigned width, unsigned height);
+    // Borrow a texture from this renderer. Keep it alive until the next present
+    // or reset; capture redraws it. No GPU->CPU->GPU round trip is needed.
+    bool present_texture(SDL_Texture* texture);
     // Redraws the last upload before reading, since present invalidates the
     // backbuffer. Includes black borders; caller owns the returned surface.
     SDL_Surface* capture();
@@ -37,6 +40,7 @@ private:
     bool target(SDL_Texture*& texture, int width, int height);
     SDL_Renderer* renderer_ = nullptr;
     SDL_Texture* frame_ = nullptr;
+    SDL_Texture* external_frame_ = nullptr;
     SDL_Texture* prescale_ = nullptr;
     SDL_Texture* reduction_[2] = {};
     int logical_width_ = 0, logical_height_ = 0;

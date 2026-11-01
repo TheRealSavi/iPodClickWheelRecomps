@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "common/tools"))
-from recomp.arm import Op, decode
+from recomp.arm import decode
 from recomp.cfg import Role, discover
 from recomp.cpp import FunctionEmitter
 from recomp.functions import Function, Kind, _is_call_site
@@ -34,6 +34,18 @@ def emit(words):
 
 
 class PhaseInstructions(unittest.TestCase):
+    def test_entry_observer_preserves_original_emitted_instructions(self):
+        words = [0xE3A00007, 0xE12FFF1E]
+        image = fixture(words)
+        body, original = emit(words)
+        function = Function(ENTRY, ENTRY + 8, "test", Kind.GAME, 0, 0, False)
+        hook = "::phase::hd::TriangleScope hd_triangle(cpu);"
+        hooked = FunctionEmitter(
+            body, function, image, {ENTRY: function}, entry_hook=hook
+        ).emit()
+        self.assertIn(hook, hooked)
+        self.assertEqual(hooked.replace("    " + hook + "\n", ""), original)
+
     def test_absolute_pointer_jump_table_does_not_decode_pointer_as_code(self):
         words = [
             0xE3500001,

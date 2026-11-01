@@ -21,6 +21,7 @@ def main():
     parser.add_argument("--image", type=Path, required=True)
     parser.add_argument("--assets", type=Path, required=True)
     parser.add_argument("--library", type=Path, required=True)
+    parser.add_argument("--render-scale", type=int, choices=range(1, 5), default=1)
     args = parser.parse_args()
     checked_image(args.image)
     preparation = json.loads((args.library / "preparation.json").read_text())
@@ -47,6 +48,8 @@ def main():
             "--library",
             str(args.library.resolve()),
             "--audio",
+            "--render-scale",
+            str(args.render_scale),
             "--quiet-sdk",
             "--frames",
             str(frames),
@@ -63,6 +66,12 @@ def main():
     (PROJECT / "build/playback-verification.log").write_text(result.stderr)
     if result.returncode:
         raise AssertionError(result.stderr[-3000:])
+    if args.render_scale > 1:
+        assert (
+            f"Phase HD: {320 * args.render_scale}x{240 * args.render_scale}"
+            in result.stderr
+        )
+        assert "Phase HD unavailable" not in result.stderr
     pid = preparation["tracks"][0]["pid"]
     for expected in (
         "LIBRARY loaded tracks=5 playlists=1",
@@ -93,6 +102,7 @@ def main():
         "green_pixels": green,
         "pause_resume": True,
         "mounted_files_unchanged": True,
+        "render_scale": args.render_scale,
     }
     (PROJECT / "build/playback-verification.json").write_text(
         json.dumps(receipt, indent=2) + "\n"

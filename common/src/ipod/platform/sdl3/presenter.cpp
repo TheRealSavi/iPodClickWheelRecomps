@@ -27,6 +27,7 @@ void Presenter::reset() {
         texture = nullptr;
     }
     frame_ = prescale_ = nullptr;
+    external_frame_ = nullptr;
     renderer_ = nullptr;
     width_ = height_ = 0;
     upload_.clear();
@@ -72,14 +73,15 @@ bool Presenter::target_pass(SDL_Texture* source, SDL_Texture* destination) {
 bool Presenter::present(const uint8_t* rgb, unsigned width, unsigned height) {
     if (!renderer_ || !rgb || !width || !height || width > INT_MAX / 8 || height > INT_MAX / 8)
         return SDL_SetError("Invalid video frame");
-    if (!frame_ || width_ != static_cast<int>(width) || height_ != static_cast<int>(height)) {
+    external_frame_ = nullptr;
+    if (!frame_ || frame_->w != static_cast<int>(width) || frame_->h != static_cast<int>(height)) {
         if (frame_)
             SDL_DestroyTexture(frame_);
         frame_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
                                    static_cast<int>(width), static_cast<int>(height));
-        width_ = static_cast<int>(width);
-        height_ = static_cast<int>(height);
     }
+    width_ = static_cast<int>(width);
+    height_ = static_cast<int>(height);
     // Explicit native RGBA storage lets both SDL and the compute shader read
     // the same upload. SDL hides native resources behind its RGB24 conversion.
     upload_.resize(size_t(width_) * size_t(height_) * 4);
@@ -89,10 +91,19 @@ bool Presenter::present(const uint8_t* rgb, unsigned width, unsigned height) {
            SDL_UpdateTexture(frame_, nullptr, upload_.data(), width_ * 4) && render_last() &&
            SDL_RenderPresent(renderer_);
 }
+bool Presenter::present_texture(SDL_Texture* texture) {
+    if (!renderer_ || !texture || SDL_GetRendererFromTexture(texture) != renderer_)
+        return SDL_SetError("External frame must belong to the presenter's renderer");
+    external_frame_ = texture;
+    width_ = texture->w;
+    height_ = texture->h;
+    return render_last() && SDL_RenderPresent(renderer_);
+}
 bool Presenter::render_last() {
     rtx_video_active_ = false;
     nis_active_ = false;
-    if (!renderer_ || !frame_ || logical_width_ <= 0 || logical_height_ <= 0)
+    SDL_Texture* frame = external_frame_ ? external_frame_ : frame_;
+    if (!renderer_ || !frame || logical_width_ <= 0 || logical_height_ <= 0)
         return SDL_SetError("No video frame available");
     if (!SDL_SetRenderTarget(renderer_, nullptr) ||
         !configure_presentation(renderer_, logical_width_, logical_height_,
@@ -102,11 +113,11 @@ bool Presenter::render_last() {
     int output_width = 0, output_height = 0;
     if (!presentation_size(renderer_, &output_width, &output_height))
         return false;
-    SDL_Texture* source = frame_;
+    SDL_Texture* source = frame;
     if (width_ > output_width || height_ > output_height) {
         // Always filter reductions, including Nearest: retain details from
         // higher-resolution game renderers instead of discarding most samples.
-        if (!SDL_SetTextureScaleMode(frame_, SDL_SCALEMODE_LINEAR))
+        if (!SDL_SetTextureScaleMode(frame, SDL_SCALEMODE_LINEAR))
             return false;
         int w = width_, h = height_;
         unsigned step = 0;
@@ -119,13 +130,13 @@ bool Presenter::render_last() {
             source = reduced;
         }
     } else {
-        if (!SDL_SetTextureScaleMode(frame_, options_.scaling == Scaling::Smooth
-                                                 ? SDL_SCALEMODE_LINEAR
-                                                 : SDL_SCALEMODE_NEAREST))
+        if (!SDL_SetTextureScaleMode(frame, options_.scaling == Scaling::Smooth
+                                                ? SDL_SCALEMODE_LINEAR
+                                                : SDL_SCALEMODE_NEAREST))
             return false;
         if (options_.scaling == Scaling::NvidiaNis &&
             (output_width > width_ || output_height > height_)) {
-            if (auto* enhanced = nis_.upscale(renderer_, frame_, output_width, output_height)) {
+            if (auto* enhanced = nis_.upscale(renderer_, frame, output_width, output_height)) {
                 source = enhanced;
                 nis_active_ = true;
             }
@@ -133,7 +144,7 @@ bool Presenter::render_last() {
         if (options_.scaling == Scaling::RtxVideo &&
             (output_width > width_ || output_height > height_)) {
             if (auto* enhanced =
-                    rtx_video_.upscale(renderer_, frame_, output_width, output_height)) {
+                    rtx_video_.upscale(renderer_, frame, output_width, output_height)) {
                 source = enhanced;
                 rtx_video_active_ = true;
             }
@@ -146,7 +157,7 @@ bool Presenter::render_last() {
                                           1, 8);
             if (factor > 1) {
                 if (!target(prescale_, width_ * factor, height_ * factor) ||
-                    !target_pass(frame_, prescale_))
+                    !target_pass(frame, prescale_))
                     return false;
                 source = prescale_;
             }

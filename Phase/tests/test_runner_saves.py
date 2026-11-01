@@ -14,6 +14,12 @@ import run
 
 
 class RunnerSaves(unittest.TestCase):
+    def test_hd_scale_is_forwarded_and_validated(self):
+        command, _ = self.command("--render-scale", "4")
+        self.assertEqual(command[command.index("--render-scale") + 1], "4")
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.command("--render-scale", "5")
+
     def command(self, *options):
         with tempfile.TemporaryDirectory() as temporary:
             project = Path(temporary)

@@ -63,6 +63,11 @@ source and SDL3 library, and copies the SDL DLL and license beside its executabl
 Attach a dedicated `SDL_Renderer` with the game's logical dimensions, set options,
 then call `present(rgb, width, height)` on the main thread. The presenter owns its
 textures but borrows the renderer: call `reset()` before destroying that renderer.
+GPU renderers can instead call `present_texture(texture)` with a texture from
+that same SDL renderer. The presenter borrows it until the next
+presentation or reset; keep it alive for screenshot readback. It may adjust the
+texture's sampling mode. The shared fitting/filtering path is identical for both
+inputs. Phase's optional HD observer uses this path without a GPU-to-CPU upload.
 `capture()` redraws the last uploaded frame before readback, because SDL invalidates
 the backbuffer after presentation. The caller owns the returned `SDL_Surface`.
 Readback includes the full drawable and black borders.

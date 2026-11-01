@@ -68,6 +68,67 @@ when this mode is selected. Enlarge the window to activate AI processing; the
 log confirms actual inference. This uses the same implementation as all six
 other desktop games.
 
+### Experimental HD drawing
+
+In the launcher, select Phase → Options → **Render scale (1–4)**. Set **4**
+for a 1280×960 internal canvas, **2** for 640×480, or leave it blank/use **1**
+for original rendering. Restart the launcher to load newly installed controls.
+The command-line equivalent is `--render-scale 4`. Enlarge the game window to
+see the extra detail; smaller windows receive a filtered reduction.
+
+This redraws supported triangles, textured geometry, gradients, alpha blending,
+additive glow, and selected bitmap blits before presentation. Geometry keeps its
+original subpixel positions and uses an RGBA8 canvas rather than rounding every
+draw back to RGB565. Original game code still runs and writes its original
+framebuffer; observers do not change guest registers, memory, or input coordinates.
+The shared presenter handles resizing, black borders, filters, and screenshots.
+RTX Video AI/NIS only run when enlarging beyond the supplied internal resolution.
+
+Flat fills, alpha fades, and both flat and interpolated additive glows now blend
+in the RGBA8 canvas. Bitmap effects support overwrite, alpha, and additive modes
+for RGBA4444, RGBA5551, RGBA8, and the decoded indexed path. Scaled and mirrored
+RGBA8/indexed images and signed row pitches are supported. RGBA4444 channels
+expand directly to eight bits instead of passing through RGB565 first. This
+preserves dim glow contributions and avoids repeated 16-bit rounding between
+layers; it does not add HDR or change the game's blending color space.
+
+The native mode branches were checked in build 3168002: `18091168` is an opaque
+flat fill, `1809125c` is flat additive, and `180914dc` is interpolated additive.
+Bitmap blend flags are at the shared state offsets `0x848` and `0x849`. The
+tinted RGBA8 blitter's opaque-texel fast path ignores tint alpha, while its
+partial-alpha path multiplies by it; the HD path preserves that distinction.
+The shutdown log reports accepted draw counts and any native framebuffer patches
+or rejected bitmap draws. Zero fallback in a replay describes that replay,
+not a guarantee that every possible game effect has been exercised.
+
+**HD lettering** uses the original font sheets at their full source resolution,
+instead of first shrinking each glyph into the 320×240 framebuffer. This retains
+the original typefaces, colors, character spacing, and screen positions while
+recovering detail the native text blitter discards. It is enabled automatically
+with render scale 2–4. Decoded glyphs are cached; source or palette changes
+invalidate the cache. No font downloads or replacement font files are required.
+
+This is experimental: bitmap fonts and artwork remain limited by their source
+resolution; it does not install replacement artwork or vector fonts. Undecoded operations
+use changed pixels from the native framebuffer in draw order. That fallback
+cannot detect native writes that reproduce the same pixel value, so unusual
+effects can differ. Select scale 1 if a screen looks wrong. HD adds work while
+the original software renderer continues to run; a fast GPU alone does not
+guarantee a higher frame rate. Rendering allocation/API failures disable HD for
+the session and report the original-rendering fallback in the log.
+
+The hooks are specific to the hash-checked build 3168002. `src/hd_renderer.cpp`
+records the decoded shader addresses; `tools/generate.py` adds scope observers
+without replacing instructions. Generated receipts list these observers.
+Authored tests in `tests/hd_renderer_test.cpp` exercise subpixel drawing,
+clipping, native fallback order, source updates, and unchanged guest state.
+Font fixtures also check thin source strokes lost by native downsampling,
+odd nibble origins/row strides, palette changes, and reused source memory.
+The playback verifier accepts `--render-scale 4` for an HD gameplay replay.
+`tests/verify_hd_state.py --image PATH --assets DIRECTORY` compares all guest
+memory (including the original framebuffer), registers, and flags after the
+same 400-frame menu replay at scales 1 and 4. Snapshots stay under `build/`.
+
 Visible play runs until you close the game, with no automatic frame or time limit.
 Hidden diagnostic runs default to 300 frames and a 15-second timeout. Explicit
 `--frames` (1–36,000) and `--timeout` (up to 600 seconds) remain available for tests.
